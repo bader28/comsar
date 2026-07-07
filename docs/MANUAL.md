@@ -135,7 +135,11 @@ is required for a normal installation.
 2. Create a virtual environment (see 2.2).
 3. `pip install bader-comsar`.
 
-`manylinux` wheels are provided; no compiler needed.
+> **Note.** Pre-compiled Linux (`manylinux`) wheels for apollon and
+> chainsaddiction are not published yet, so on Linux those two packages build
+> from source during install. Install the build prerequisites first:
+> `sudo apt install build-essential python3-dev` (or the equivalent for your
+> distribution). Windows and macOS install from wheels without a compiler.
 
 ### 2.6 Building from source
 
