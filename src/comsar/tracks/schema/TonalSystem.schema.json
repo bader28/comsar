@@ -1,0 +1,41 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "type": "object",
+    "title": "tonalsystem root",
+    "description": "Tonal System parameters",
+    "required": ["dcent", "dts", "minlen", "mindev", "noctaves", "f0"],
+    "additionalProperties": false,
+    "properties": {
+        "dcent": {
+            "$id": "#properties/dcent",
+            "description": "Precision in cent",
+            "type": "integer"
+        },
+        "dts": {
+            "$id": "#properties/dts",
+            "description": "Standard Deviation of Gauss curve TS Cent Spectrum correlation",
+            "type": "float"
+        },
+        "minlen": {
+            "$id": "#properties/minlen",
+            "description": "Minimum length of similar adjacent pitches qualifying as pitch event, in analysis frames",
+            "type": "integer"
+        },
+        "mindev": {
+            "$id": "#properties/mindev",
+            "description": "Allowed deviation of adjacent pitches qualifying as pitch event, in cent",
+            "type": "integer"
+        }
+        "noctaves": {
+            "$id": "#properties/noctaves",
+            "description": "Number of octaves allowed",
+            "type": "integer"
+        }
+        "f0": {
+            "$id": "#properties/f0",
+            "description": "Lowest frequency as based on allowed octaves",
+            "type": "float"
+        }
+    }
+}
+

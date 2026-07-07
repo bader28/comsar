@@ -59,6 +59,39 @@ class TimbreTrackCorrGramParams(TrackParams):
     corr_dim: asc.CorrDimParams
 
 
+# --- merged back from comsar_old for PitchTrack / tonal-system / n-gram ------
+# ``_schema`` is deliberately ``None`` (as in the classes above) so importing
+# this module never depends on external JSON schema files being loadable.
+
+@dataclass
+class PitchTrackParams(TrackParams):
+    """Parameter set for PitchTrack."""
+    segmentation: asc.StftParams
+
+
+@dataclass
+class TonalSystemParams(container.Params):
+    """Parameter set for tonal system analysis."""
+    _schema: ClassVar[types.Schema] = None
+    dcent: int = 1
+    dts: float = 0.1
+    minlen: int = 3
+    mindev: int = 60
+    noctaves: int = 8
+    f0: float = 27.5
+
+
+@dataclass
+class ngramParams(container.Params):
+    """Parameter set for n-gram analysis."""
+    _schema: ClassVar[types.Schema] = None
+    minnotelength: int = 10
+    ngram: int = 3
+    ngcentmin: int = 0
+    ngcentmax: int = 1200
+    nngram: int = 10
+
+
 class TrackResult:
     """Provide track results."""
     def __init__(self, meta: TrackMeta, params: TrackParams,

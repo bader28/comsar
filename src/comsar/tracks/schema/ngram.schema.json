@@ -1,0 +1,35 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "type": "object",
+    "title": "ngram root",
+    "description": "n-gram parameters",
+    "required": ["minnotelength", "ngram", "ngcentmin", "ngcentmax", "nngram"],
+    "additionalProperties": false,
+    "properties": {
+        "minnotelength": {
+            "$id": "#properties/minnotelength",
+            "description": "Minimum note length to qualify as note",
+            "type": "integer"
+        },
+        "ngram": {
+            "$id": "#properties/ngram",
+            "description": "n-gram depth, e.g. 2, 3, 4, etc.",
+            "type": "integer"
+        },
+        "ngcentmin": {
+            "$id": "#properties/ngcentmin",
+            "description": "n-gram minimum allowed cent deviation of two adjacent pitches to qualify as note, in cent",
+            "type": "integer"
+        },
+        "ngcentmax": {
+            "$id": "#properties/ngcentmax",
+            "description": "n-gram maximum allowed cent deviation of two adjacent pitches to qualify as note, in cent",
+            "type": "integer"
+        }
+        "nngram": {
+            "$id": "#properties/nngram",
+            "description": "Number of n-grams with largest histograms",
+            "type": "integer"
+        }
+    }
+}

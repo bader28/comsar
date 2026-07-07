@@ -2,6 +2,12 @@
 # Copyright (C) 2019 Michael Blaß
 # michael.blass@uni-hamburg.de
 
+# NOTE: rhythm_track() below is unfinished upstream code (it references a few
+# names that are not imported). ``from __future__ import annotations`` keeps the
+# module at least importable; the function itself is not wired into the public
+# API (comsar.tracks only exposes TimbreTrack and PitchTrack).
+from __future__ import annotations
+
 import logging
 
 from apollon.signal import spectral

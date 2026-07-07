@@ -26,6 +26,8 @@ wheels/
 .mypy*/
 *.swp
 *.ipynb
+# ...but DO keep the curated example notebooks
+!examples/*.ipynb
 .ipynb_checkpoints
 .mypy_cache
 .comsar*/
