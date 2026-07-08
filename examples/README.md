@@ -26,6 +26,7 @@ for the feature/pitch/timbre extraction notebooks.
 
 | Notebook | What it shows |
 |---|---|
+| `TimbreTrack_SimpleExample.ipynb` | **Start here.** Extract the 7 timbre features and show an interactive player: grey waveform + coloured feature tracks, a play button and a cursor that follows the audio. Self-contained — the sample audio `CHI-109_Luguhu_Hulusheng.wav` ships next to it. |
 | `Feature_Extract_From_Wav.ipynb` | Extract low-level audio features from a WAV file with apollon. |
 | `TimbreTrack_Extract_Features.ipynb` | Compute a `TimbreTrack` (spectral/timbre feature track) from audio. |
 | `PitchTrack_f0_Extract.ipynb` | Extract the fundamental frequency (f0 / pitch) track from a WAV file. |
