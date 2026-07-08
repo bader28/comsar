@@ -101,3 +101,6 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# analysis output written by the example notebooks
+examples/*_timbre.csv
