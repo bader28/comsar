@@ -303,6 +303,14 @@ The **hop size** — the time step between two feature values — is
 More overlap gives more frames and a longer computation; the correlation
 dimension dominates the runtime.
 
+Note that `n_perseg` and `n_overlap` are counted in **whole samples** and must
+be integers. If you want to express the overlap as a fraction of the window,
+convert it explicitly:
+
+```python
+OVERLAP = int(WINDOW_SIZE * 0.8)     # 80 % overlap
+```
+
 ```python
 from comsar import TimbreTrack
 from apollon.signal import container
