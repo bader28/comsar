@@ -278,9 +278,55 @@ f0`), `ngramParams` (`minnotelength, ngram, ngcentmin, ngcentmax, nngram`).
 
 ### 5.2 comsar.TimbreTrack
 
-`TimbreTrack(...)` — computes a track of timbre/spectral features (via apollon's
-STFT and correlation-dimension features) from audio. `extract(path_or_array,
-...)` returns a `TrackResult`.
+`TimbreTrack(stft_params=None, corr_dim_params=None)`
+
+Computes a track of seven timbre features from an audio file:
+`SpectralCentroid`, `SpectralSpread`, `SpectralFlux`, `Roughness`, `Sharpness`,
+`SPL` and `CorrelationDimension`. `extract(path)` returns a `TrackResult`
+(features as a pandas DataFrame, one row per analysis window).
+
+**How the analysis is windowed.** The recording is cut into short analysis
+windows; every feature is computed once per window. The windowing is set with
+an `apollon.signal.container.StftParams` object:
+
+| Parameter | Meaning |
+|---|---|
+| `fps` | Sample rate in Hz. **Must match the audio file** — `extract` raises `ValueError` otherwise. |
+| `window` | Window function applied before the FFT, e.g. `'hamming'`. |
+| `n_fft` | FFT length; `None` uses `n_perseg`. |
+| `n_perseg` | Window length in **samples**. Longer windows → finer frequency resolution but coarser time resolution. |
+| `n_overlap` | Overlap between consecutive windows in **samples**; must satisfy `0 < n_overlap < n_perseg`. Overlapping windows produce a denser, smoother feature track. |
+| `extend`, `pad` | Add (and pad) half a window at the start and end so the first/last frames are centred on the signal. |
+
+The **hop size** — the time step between two feature values — is
+`n_perseg - n_overlap` samples, i.e. `(n_perseg - n_overlap) / fps` seconds.
+More overlap gives more frames and a longer computation; the correlation
+dimension dominates the runtime.
+
+```python
+from comsar import TimbreTrack
+from apollon.signal import container
+
+SAMPLE_RATE = 44100              # Hz — must match the audio file
+WINDOW_SIZE = 2**14              # samples per window (16384 ~ 0.37 s)
+OVERLAP     = WINDOW_SIZE // 2   # 50% overlap -> one value every ~0.19 s
+
+stft_params = container.StftParams(
+    fps=SAMPLE_RATE, window='hamming', n_fft=None,
+    n_perseg=WINDOW_SIZE, n_overlap=OVERLAP,
+    extend=True, pad=True)
+
+tt = TimbreTrack(stft_params=stft_params)
+result = tt.extract("my_audio.wav")
+```
+
+Without arguments, `TimbreTrack()` uses `n_perseg=2**15` and `n_overlap=2**14`
+(0.74-second windows, 50 % overlap, one value every ≈ 0.37 s at 44.1 kHz).
+
+The optional second argument `corr_dim_params`
+(`container.CorrDimParams(delay, m_dim, n_bins, scaling_size)`) controls the
+correlation-dimension estimate (embedding delay, embedding dimension, number of
+histogram bins, scaling-region size).
 
 ### 5.3 comsar.tracks.utilities
 
