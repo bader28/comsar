@@ -19,8 +19,9 @@ Computational Music and Sound Archiving: a manual for the
   - [5.2 comsar.TimbreTrack](#52-comsartimbretrack)
   - [5.3 comsar.tracks.utilities](#53-comsartracksutilities)
   - [5.4 comsar.tracks.helpers](#54-comsartrackshelpers)
-  - [5.5 apollon (backbone)](#55-apollon-backbone)
-  - [5.6 chainsaddiction (Poisson HMM)](#56-chainsaddiction-poisson-hmm)
+  - [5.5 comsar.viz — interactive player](#55-comsarviz--interactive-player)
+  - [5.6 apollon (backbone)](#56-apollon-backbone)
+  - [5.7 chainsaddiction (Poisson HMM)](#57-chainsaddiction-poisson-hmm)
 - [6. Example notebooks](#6-example-notebooks)
 - [7. Command-line scripts](#7-command-line-scripts)
 - [8. For maintainers: releasing and building wheels](#8-for-maintainers-releasing-and-building-wheels)
@@ -296,7 +297,32 @@ Plotting / analysis helpers for Self-Organizing Maps: `init_pca`, `match_counts`
 `plot_counts`, `plot_umatrix`, `plot_component`, `plot_feature_importance`,
 `mean_feat_dist`, `unit_info`, and more. Used by the SOM example notebooks.
 
-### 5.5 apollon (backbone)
+### 5.5 comsar.viz — interactive player
+
+`timbre_player(wav_path, features, visible=2, width=1000, wave_h=150, feat_h=210)`
+
+An interactive player widget for Jupyter: the waveform of `wav_path` is drawn in
+light grey with each feature of `features` (a DataFrame such as
+`TimbreTrack().extract(wav).features`, or the `TrackResult` itself) overlaid as
+a coloured, `[0, 1]`-normalised curve. It has a play button, a cursor that
+follows the playback position, click-to-seek on the plot, and a clickable
+legend that shows/hides individual features (hidden entries are greyed out).
+Only the first `visible` features are shown initially (`visible=None` shows
+all). The widget is self-contained HTML/JS with the audio embedded as a data
+URI, so it survives HTML export of the notebook. Also re-exported at the top
+level: `from comsar import timbre_player`.
+
+```python
+from comsar import TimbreTrack, timbre_player
+
+features = TimbreTrack().extract("my_audio.wav").features
+timbre_player("my_audio.wav", features)          # first two features shown
+timbre_player("my_audio.wav", features, visible=None)   # all features shown
+```
+
+See `examples/TimbreTrack_SimpleExample.ipynb` for a complete walkthrough.
+
+### 5.6 apollon (backbone)
 
 Key entry points used by comsar and the notebooks:
 
@@ -309,7 +335,7 @@ Key entry points used by comsar and the notebooks:
 - `apollon.hmm` — Hidden Markov Models.
 - `apollon.io.io` — `save_to_pickle`, `load_from_pickle`, JSON I/O.
 
-### 5.6 chainsaddiction (Poisson HMM)
+### 5.7 chainsaddiction (Poisson HMM)
 
 `import chainsaddiction`; the compiled submodules `chainsaddiction.poishmm` and
 `chainsaddiction.utils` provide Poisson HMM fitting (forward–backward, EM). Used
