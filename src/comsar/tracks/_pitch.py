@@ -49,26 +49,59 @@ TONALSYSTEM_DEFAULT = TonalSystemParams(dcent=1, dts=0.1, minlen=3, mindev=60, n
 
 NGRAM_DEFAULT = ngramParams(minnotelength=10, ngram=3, ngcentmin=0, ngcentmax=1200, nngram=10)
 
+# Legacy sample-based default (50 ms windows with 80% overlap at 44.1 kHz).
+# Only used when an explicit ``seg_params`` object is passed.
 SEGMENTATION_DEFAULT = aps.SegmentationParams(n_perseg=2205, n_overlap=1764, pad=False)
+
+# Time-based defaults, equivalent to the historical values at 44.1 kHz but
+# expressed in milliseconds so that any sample rate yields the same time
+# resolution.
+WINDOW_MS_DEFAULT = 50.0    # = 2205 samples at 44.1 kHz
+OVERLAP_DEFAULT = 0.8       # = 1764 samples at 44.1 kHz
 
 
 class PitchTrack:
     """Compute PitchTrack of an audio file.
+
+    The analysis windowing is specified in *time* units (milliseconds and an
+    overlap fraction). Window and hop size are converted to samples using the
+    sample rate of each analysed file, so audio files with *different sample
+    rates* are directly comparable: equal durations produce (up to rounding)
+    equal numbers of analysis frames, and the returned feature table carries
+    the frame time in seconds as its index.
     """
     def __init__(self,
+                 window_ms: float = WINDOW_MS_DEFAULT,
+                 overlap: float = OVERLAP_DEFAULT,
                  seg_params: Optional[aps.SegmentationParams] = None,
                  tonalsystem_params: Optional[TonalSystemParams] = None,
                  ngram_params: Optional[ngramParams] = None) -> None:
         """
         Args:
-            seg_params:  Parameters for Segmentation.
+            window_ms:   Length of the analysis window in milliseconds.
+            overlap:     Overlap between consecutive windows as a fraction of
+                         the window length (0 < overlap < 1).
+            seg_params:  Legacy sample-based segmentation parameters. If given,
+                         ``window_ms``/``overlap`` are ignored (historical
+                         behaviour with a fixed sample rate).
         """
-        self.params = PitchTrackParams(seg_params or SEGMENTATION_DEFAULT)
+        if seg_params is None and not 0.0 < float(overlap) < 1.0:
+            raise ValueError('``overlap`` must be a fraction with '
+                             f'0 < overlap < 1, got {overlap}.')
+
+        self.window_ms = float(window_ms)
+        self.overlap = float(overlap)
+        self._fixed = seg_params        # legacy mode if not None
+
+        if self._fixed is not None:
+            self.params = PitchTrackParams(self._fixed)
+            self.cutter = aps.Segmentation(**self._fixed.to_dict())
+        else:
+            self.params = None          # set per file in ``extract``
+            self.cutter = None
 
         self.TSparams = TonalSystemParams(tonalsystem_params or TONALSYSTEM_DEFAULT)
         self.ngparams = ngramParams(ngram_params or NGRAM_DEFAULT)
-
-        self.cutter = aps.Segmentation(**self.params.segmentation.to_dict())
 
         self.feature_names = ('Pitch','SPL')
         self.funcs = [acf_pitch, features.spl]
@@ -79,36 +112,80 @@ class PitchTrack:
     def n_features(self) -> int:
         """Number of features on track"""
         return len(self.feature_names)
-    
+
+    def _make_cutter(self, fps: int) -> aps.Segmentation:
+        """Convert the time-based window setup to samples for rate ``fps``."""
+        if self._fixed is not None:
+            return self.cutter
+        n_perseg = max(2, int(round(self.window_ms * fps / 1000.0)))
+        n_overlap = min(max(int(round(n_perseg * self.overlap)), 1),
+                        n_perseg - 1)
+        # pad=True guarantees enough frames at the borders; the frame count is
+        # then trimmed to the rate-independent target in ``extract``.
+        seg_params = aps.SegmentationParams(n_perseg=n_perseg,
+                                            n_overlap=n_overlap,
+                                            extend=True, pad=True)
+        self.params = PitchTrackParams(seg_params)
+        self.cutter = aps.Segmentation(**seg_params.to_dict())
+        return self.cutter
+
     def extract(self, input1: None, input2: Optional[Any] = None, input3: Optional[Any] = None) -> pd.DataFrame:
         """Perform extraction.
+
+        Any sample rate is accepted; the analysis windows are computed from
+        ``window_ms``/``overlap`` for the file's own sample rate. The index of
+        the returned feature table is the frame time in seconds (``time_s``).
         """
         if type(input1) is str:
             snd = apa.AudioFile(input1)
-            segs = self.cutter.transform(snd.data.squeeze())
+            fps = snd.fps
+            cutter = self._make_cutter(fps)
+            segs = cutter.transform(snd.data.squeeze())
             args = [(segs.data, snd.fps),
                 (segs.data,)]
         else:
             snd = input1
             fps = int(input2)
-            segs = self.cutter.transform(snd.squeeze())
+            cutter = self._make_cutter(fps)
+            segs = cutter.transform(snd.squeeze())
             args = [(segs.data, input2),
                 (segs.data,)]
-        
+
         kwargs = [{},{}]
-        
+
         out = np.zeros((segs.n_segs, self.n_features))
         for i, (fun, arg, kwarg) in enumerate(zip(self.funcs, args, kwargs)):
             out[:, i] = self._worker(i, fun, arg, kwarg)
-        
+
         if type(input1) is str:
             meta = TrackMeta(comsar.__version__, apt.time_stamp(),
                          snd.file_name)
         else:
             meta = TrackMeta(comsar.__version__, apt.time_stamp(),
                          input3)
-        
+
         out = pd.DataFrame(data=out, columns=self.feature_names)
+        # frame time in seconds: with ``extend=True`` the first frame is
+        # centred on t=0, so frame i sits at i * hop
+        seg = self.params.segmentation
+        hop = seg.n_perseg - seg.n_overlap
+        if self._fixed is None:
+            # Rounding the hop to whole samples plus border extension/padding
+            # can yield extra frames at some sample rates. Trim to the
+            # rate-independent count ceil(duration_ms / hop_ms), so files
+            # of equal duration produce the same number of frames at any
+            # sample rate.
+            if type(input1) is str:
+                n_samples = snd.data.squeeze().shape[0]
+            else:
+                n_samples = snd.squeeze().shape[0]
+            duration_ms = n_samples / fps * 1000.0
+            hop_ms = self.window_ms * (1.0 - self.overlap)
+            n_expected = int(np.ceil(duration_ms / hop_ms - 1e-6))
+            if len(out) > n_expected:
+                out = out.iloc[:n_expected]
+        out.index = np.round(np.arange(len(out)) * (hop / fps), 6)
+        out.index.name = 'time_s'
 
         if type(input1) is str:
             snd.close()

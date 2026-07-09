@@ -253,9 +253,17 @@ a sample rate: `pt.extract(signal_array, sample_rate, source_name)`.
 
 ### 5.1 comsar.PitchTrack
 
-`PitchTrack(seg_params=None, tonalsystem_params=None, ngram_params=None)`
+`PitchTrack(window_ms=50.0, overlap=0.8, seg_params=None, tonalsystem_params=None, ngram_params=None)`
 
 Fundamental-frequency / melody / tonal-system analysis.
+
+The analysis windowing is specified in **time units** exactly as for
+`TimbreTrack` (see 5.2): `window_ms` is the window length in milliseconds and
+`overlap` the overlap fraction; the defaults (50 ms, 80 %) correspond to the
+historical 2205/1764 samples at 44.1 kHz. Any sample rate is accepted, equal
+durations produce equal numbers of frames, and the returned feature table
+carries the frame time in seconds (`time_s`) as its index. Passing a legacy
+`seg_params` object restores the fixed sample-based behaviour.
 
 - **`extract(input1, input2=None, input3=None) -> TrackResult`**
   Extract the pitch (auto-correlation based f0) and sound-pressure-level track.
@@ -278,63 +286,55 @@ f0`), `ngramParams` (`minnotelength, ngram, ngcentmin, ngcentmax, nngram`).
 
 ### 5.2 comsar.TimbreTrack
 
-`TimbreTrack(stft_params=None, corr_dim_params=None)`
+`TimbreTrack(window_ms=743.0, overlap=0.5, corr_dim_params=None, stft_params=None, window='hamming', n_fft=None)`
 
 Computes a track of seven timbre features from an audio file:
 `SpectralCentroid`, `SpectralSpread`, `SpectralFlux`, `Roughness`, `Sharpness`,
 `SPL` and `CorrelationDimension`. `extract(path)` returns a `TrackResult`
-(features as a pandas DataFrame, one row per analysis window).
+(features as a pandas DataFrame, one row per analysis window; the index is the
+frame time in seconds, `time_s`).
 
-**How the analysis is windowed.** The recording is cut into short analysis
-windows; every feature is computed once per window. The windowing is set with
-an `apollon.signal.container.StftParams` object:
+**How the analysis is windowed — in time units.** The recording is cut into
+short analysis windows; every feature is computed once per window. The
+windowing is specified in *time*, not in samples:
 
 | Parameter | Meaning |
 |---|---|
-| `fps` | Sample rate in Hz. **Must match the audio file** — `extract` raises `ValueError` otherwise. |
-| `window` | Window function applied before the FFT, e.g. `'hamming'`. |
-| `n_fft` | FFT length; `None` uses `n_perseg`. |
-| `n_perseg` | Window length in **samples**. Longer windows → finer frequency resolution but coarser time resolution. |
-| `n_overlap` | Overlap between consecutive windows in **samples**; must satisfy `0 < n_overlap < n_perseg`. Overlapping windows produce a denser, smoother feature track. |
-| `extend`, `pad` | Add (and pad) half a window at the start and end so the first/last frames are centred on the signal. |
+| `window_ms` | Length of one analysis window in **milliseconds**. Longer windows → finer frequency resolution, coarser time resolution. |
+| `overlap` | Overlap between consecutive windows as a **fraction** of the window length (`0 < overlap < 1`). More overlap → denser, smoother feature track, longer computation. |
 
 The **hop size** — the time step between two feature values — is
-`n_perseg - n_overlap` samples, i.e. `(n_perseg - n_overlap) / fps` seconds.
-More overlap gives more frames and a longer computation; the correlation
-dimension dominates the runtime.
+`window_ms × (1 − overlap)`.
 
-Note that `n_perseg` and `n_overlap` are counted in **whole samples** and must
-be integers. If you want to express the overlap as a fraction of the window,
-convert it explicitly:
-
-```python
-OVERLAP = int(WINDOW_SIZE * 0.8)     # 80 % overlap
-```
+**Any sample rate is accepted, and results stay comparable.** The window and
+hop are converted to samples with each file's own sample rate at `extract`
+time; the upper frequency limit of the roughness estimate is clipped to the
+Nyquist frequency automatically. Consequently, two recordings of equal
+duration produce **exactly the same number of analysis values** — the same
+number of rows in the exported CSV — even if one is sampled at 44 100 Hz and
+the other at 22 050 Hz or 96 000 Hz.
 
 ```python
 from comsar import TimbreTrack
-from apollon.signal import container
 
-SAMPLE_RATE = 44100              # Hz — must match the audio file
-WINDOW_SIZE = 2**14              # samples per window (16384 ~ 0.37 s)
-OVERLAP     = WINDOW_SIZE // 2   # 50% overlap -> one value every ~0.19 s
-
-stft_params = container.StftParams(
-    fps=SAMPLE_RATE, window='hamming', n_fft=None,
-    n_perseg=WINDOW_SIZE, n_overlap=OVERLAP,
-    extend=True, pad=True)
-
-tt = TimbreTrack(stft_params=stft_params)
-result = tt.extract("my_audio.wav")
+tt = TimbreTrack(window_ms=370.0, overlap=0.8)   # one value every 74 ms
+result = tt.extract("my_audio.wav")              # any sample rate
+result.features          # DataFrame, index = time_s
 ```
 
-Without arguments, `TimbreTrack()` uses `n_perseg=2**15` and `n_overlap=2**14`
-(0.74-second windows, 50 % overlap, one value every ≈ 0.37 s at 44.1 kHz).
+Without arguments, `TimbreTrack()` uses 743 ms windows with 50 % overlap
+(equivalent to the historical `2**15` samples at 44.1 kHz).
 
-The optional second argument `corr_dim_params`
+The optional argument `corr_dim_params`
 (`container.CorrDimParams(delay, m_dim, n_bins, scaling_size)`) controls the
 correlation-dimension estimate (embedding delay, embedding dimension, number of
 histogram bins, scaling-region size).
+
+**Legacy sample-based mode.** Passing an
+`apollon.signal.container.StftParams` object as `stft_params` restores the
+historical behaviour: windowing in samples at one fixed sample rate
+(`extract` raises `ValueError` for files with any other rate). Use this only
+to reproduce old analyses exactly.
 
 ### 5.3 comsar.tracks.utilities
 
@@ -500,6 +500,14 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
     when building without git tags).
 - **CI**: added `cibuildwheel` configuration and a GitHub Actions workflow to
   build and publish multi-platform wheels (see section 8).
+- **Sample-rate independence (2026-07)**: `TimbreTrack` and `PitchTrack` no
+  longer expect 44 100 Hz. Analysis windows are specified in milliseconds plus
+  an overlap fraction (`window_ms`, `overlap`) and converted to samples per
+  file, the roughness limit is clipped to the Nyquist frequency, and the frame
+  count is made rate-independent — files of equal duration yield the same
+  number of analysis values at any sample rate. Feature tables now carry the
+  frame time in seconds (`time_s`) as index. The old sample-based mode remains
+  available via `stft_params`/`seg_params`.
 
 A few very old notebooks referenced an intermediate API
 (`import comsar.Pitchtrack.…`) that no longer exists in any version; those need a
