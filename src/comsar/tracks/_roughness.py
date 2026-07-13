@@ -240,18 +240,13 @@ class WaveletRoughness:
         pamp = a1 - 0.25 * (a0 - a2) * delta
         return pfreq, pamp
 
-    def extract(self, path) -> RoughnessResult:
-        """Run the wavelet roughness analysis on the audio file ``path``.
+    def _compute(self, data: np.ndarray, fps: int, want_partials: bool = True):
+        """Core per-frame computation on a mono signal.
 
-        Any sample rate is accepted. Returns a :class:`RoughnessResult`.
+        Returns ``(rgh, partials_or_None, n_frames, hop_s, f_max)`` where
+        ``rgh`` has shape (n_frames, 2) = (Helmholtz-Bader, Sethares).
         """
-        snd = AudioFile(path)
-        fps = snd.fps
-        data = snd.data.squeeze()
-        if data.ndim > 1:
-            data = data.mean(axis=1)
         data = np.asarray(data, dtype=np.float64)
-
         f_max = min(self.f_max, fps / 2.0 - 1.0)
         freqs = np.arange(self.f_min, f_max + self.freq_step, self.freq_step)
 
@@ -276,22 +271,52 @@ class WaveletRoughness:
             if pf.size:
                 rgh[k, 0] = helmholtz_bader_roughness(pf, pa)
                 rgh[k, 1] = sethares_roughness(pf, pa)
-                t = round(k * hop_s, 6)
-                p_time.append(np.full(pf.size, t))
-                p_freq.append(pf)
-                p_amp.append(pa)
+                if want_partials:
+                    t = round(k * hop_s, 6)
+                    p_time.append(np.full(pf.size, t))
+                    p_freq.append(pf)
+                    p_amp.append(pa)
         if self.verbose:
             print(f'{timer() - pace:.4} s.')
 
+        partials = None
+        if want_partials:
+            if p_time:
+                partials = pd.DataFrame({
+                    'time_s': np.concatenate(p_time),
+                    'frequency': np.concatenate(p_freq),
+                    'amplitude': np.concatenate(p_amp)})
+            else:
+                partials = pd.DataFrame(columns=['time_s', 'frequency', 'amplitude'])
+        return rgh, partials, n_frames, hop_s, f_max
+
+    def roughness_arrays(self, signal: np.ndarray, fps: int):
+        """Return ``(helmholtz_bader, sethares)`` roughness arrays for a mono
+        ``signal`` sampled at ``fps``.
+
+        Used by :class:`comsar.TimbreTrack` to append the two roughness columns
+        without re-reading the audio file.
+        """
+        rgh, _, _, _, _ = self._compute(np.asarray(signal), fps,
+                                        want_partials=False)
+        return rgh[:, 0], rgh[:, 1]
+
+    def extract(self, path) -> RoughnessResult:
+        """Run the wavelet roughness analysis on the audio file ``path``.
+
+        Any sample rate is accepted. Returns a :class:`RoughnessResult`.
+        """
+        snd = AudioFile(path)
+        fps = snd.fps
+        data = snd.data.squeeze()
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+
+        rgh, partials, n_frames, hop_s, f_max = self._compute(
+            data, fps, want_partials=True)
+
         index = pd.Index(np.round(np.arange(n_frames) * hop_s, 6), name='time_s')
         features = pd.DataFrame(rgh, columns=self.feature_names, index=index)
-        if p_time:
-            partials = pd.DataFrame({
-                'time_s': np.concatenate(p_time),
-                'frequency': np.concatenate(p_freq),
-                'amplitude': np.concatenate(p_amp)})
-        else:
-            partials = pd.DataFrame(columns=['time_s', 'frequency', 'amplitude'])
 
         file_meta = SourceMeta(*snd.file_name.split('.'), snd.hash)
         meta = TrackMeta(comsar.__version__, datetime.utcnow(), file_meta)

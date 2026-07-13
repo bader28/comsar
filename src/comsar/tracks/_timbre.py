@@ -58,19 +58,30 @@ class TimbreTrack:
                  stft_params: Optional[container.StftParams] = None,
                  window: str = 'hamming',
                  n_fft: Optional[int] = None,
+                 wavelet_roughness: bool = True,
+                 roughness_params: Optional[dict] = None,
                  ) -> None:
         """
         Args:
-            window_ms:        Length of the analysis window in milliseconds.
-            overlap:          Overlap between consecutive windows as a
-                              fraction of the window length (0 < overlap < 1).
-            corr_dim_params:  Parameter set for correlation dimension.
-            stft_params:      Legacy sample-based parameters. If given,
-                              ``window_ms``/``overlap`` are ignored, and the
-                              audio file must match ``stft_params.fps``
-                              exactly (historical behaviour).
-            window:           Window function for the STFT.
-            n_fft:            FFT length; ``None`` uses the window size.
+            window_ms:         Length of the analysis window in milliseconds.
+            overlap:           Overlap between consecutive windows as a
+                               fraction of the window length (0 < overlap < 1).
+            corr_dim_params:   Parameter set for correlation dimension.
+            stft_params:       Legacy sample-based parameters. If given,
+                               ``window_ms``/``overlap`` are ignored, and the
+                               audio file must match ``stft_params.fps``
+                               exactly (historical behaviour).
+            window:            Window function for the STFT.
+            n_fft:             FFT length; ``None`` uses the window size.
+            wavelet_roughness: If ``True`` (default), two extra columns
+                               ``RoughnessHelmholtzBader`` and
+                               ``RoughnessSethares`` from the wavelet
+                               :class:`WaveletRoughness` analysis are appended
+                               to the feature table.
+            roughness_params:  Optional dict of extra keyword arguments for
+                               :class:`WaveletRoughness` (``f_min``, ``f_max``,
+                               ``threshold``, ``freq_step``); ``window_ms`` and
+                               ``overlap`` are taken from this track.
         """
         if stft_params is None and not 0.0 < float(overlap) < 1.0:
             raise ValueError('``overlap`` must be a fraction with '
@@ -82,6 +93,8 @@ class TimbreTrack:
         self.n_fft = n_fft
         self.corr_dim = corr_dim_params or CORR_DIM_DEFAULT
         self._fixed = stft_params      # legacy mode if not None
+        self.wavelet_roughness = wavelet_roughness
+        self.roughness_params = dict(roughness_params or {})
 
         if self._fixed is not None:
             self.params = TimbreTrackParams(self._fixed, self.corr_dim)
@@ -192,6 +205,30 @@ class TimbreTrack:
                 out = out.iloc[:n_expected]
         out.index = np.round(np.arange(len(out)) * (hop / fps), 6)
         out.index.name = 'time_s'
+
+        # Optionally append the two wavelet roughness columns (Helmholtz-Bader,
+        # Sethares) computed on the same signal with matching windowing.
+        if self.wavelet_roughness:
+            from ._roughness import WaveletRoughness
+            win_ms = self.window_ms if self._fixed is None else \
+                stft_params.n_perseg / fps * 1000.0
+            ovl = self.overlap if self._fixed is None else \
+                stft_params.n_overlap / stft_params.n_perseg
+            wr = WaveletRoughness(window_ms=win_ms, overlap=ovl,
+                                  **self.roughness_params)
+            wr.verbose = self.verbose
+            sig = snd.data.squeeze()
+            if sig.ndim > 1:
+                sig = sig.mean(axis=1)
+            hb, seth = wr.roughness_arrays(sig, fps)
+            n = len(out)
+            hb = np.resize(hb, n) if len(hb) >= n else \
+                np.concatenate([hb, np.zeros(n - len(hb))])
+            seth = np.resize(seth, n) if len(seth) >= n else \
+                np.concatenate([seth, np.zeros(n - len(seth))])
+            out['RoughnessHelmholtzBader'] = hb
+            out['RoughnessSethares'] = seth
+
         snd.close()
         return TrackResult(track_meta, self.params, out)
 

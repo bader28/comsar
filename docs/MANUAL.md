@@ -287,13 +287,21 @@ f0`), `ngramParams` (`minnotelength, ngram, ngcentmin, ngcentmax, nngram`).
 
 ### 5.2 comsar.TimbreTrack
 
-`TimbreTrack(window_ms=743.0, overlap=0.5, corr_dim_params=None, stft_params=None, window='hamming', n_fft=None)`
+`TimbreTrack(window_ms=743.0, overlap=0.5, corr_dim_params=None, stft_params=None, window='hamming', n_fft=None, wavelet_roughness=True, roughness_params=None)`
 
 Computes a track of seven timbre features from an audio file:
 `SpectralCentroid`, `SpectralSpread`, `SpectralFlux`, `Roughness`, `Sharpness`,
 `SPL` and `CorrelationDimension`. `extract(path)` returns a `TrackResult`
 (features as a pandas DataFrame, one row per analysis window; the index is the
 frame time in seconds, `time_s`).
+
+By default (`wavelet_roughness=True`) two further columns,
+`RoughnessHelmholtzBader` and `RoughnessSethares`, are appended from the wavelet
+roughness analysis (see 5.3), computed on the same frames — so the table has
+nine columns. Pass `wavelet_roughness=False` to skip them (faster), or
+`roughness_params={...}` to forward `f_min`/`f_max`/`threshold`/`freq_step` to
+the underlying `WaveletRoughness` (its `window_ms`/`overlap` are taken from this
+track). Note the older FFT-based `Roughness` column is kept as well.
 
 **How the analysis is windowed — in time units.** The recording is cut into
 short analysis windows; every feature is computed once per window. The
