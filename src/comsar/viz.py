@@ -55,6 +55,7 @@ _PLAYER_DOC = r"""<!doctype html><html><head><meta charset="utf-8"><style>
 const D = __PAYLOAD__;
 const W = D.width, WH = D.waveH, FH = D.featH, PH = D.partH, H = WH + FH + PH;
 D.series.forEach((s,i)=>{ s.on = i < D.visible; });
+D.showParts = true;
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const dpr = window.devicePixelRatio || 1;
 cv.width = W*dpr; cv.height = H*dpr; cv.style.height = H+'px'; ctx.scale(dpr,dpr);
@@ -86,7 +87,7 @@ function draw(){
     ctx.stroke();
   }
   // --- partial-gram (detected partial frequencies over time; grey = amplitude) ---
-  if(PH > 0 && D.parts){
+  if(PH > 0 && D.parts && D.showParts){
     const top = WH+FH, bot = H, ph = PH;
     ctx.strokeStyle = '#ececea'; ctx.beginPath();
     ctx.moveTo(0,top+0.5); ctx.lineTo(W,top+0.5); ctx.stroke();
@@ -116,8 +117,10 @@ for(const s of D.series){
   lg.appendChild(d);
 }
 if(PH > 0 && D.parts){
-  const d=document.createElement('span'); d.className='lg'; d.style.cursor='default';
+  const d=document.createElement('span'); d.className='lg';
+  d.title='Click to hide/show the partial frequencies';
   d.innerHTML='<span class="sw" style="background:#666"></span>partials (grey = amplitude)';
+  d.onclick=()=>{ D.showParts=!D.showParts; d.classList.toggle('off', !D.showParts); draw(); };
   lg.appendChild(d);
 }
 const au=document.getElementById('au'), cur=document.getElementById('cursor'),

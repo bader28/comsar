@@ -220,7 +220,8 @@ class TimbreTrack:
             sig = snd.data.squeeze()
             if sig.ndim > 1:
                 sig = sig.mean(axis=1)
-            hb, seth = wr.roughness_arrays(sig, fps)
+            rgh, partials, _, _, _ = wr._compute(sig, fps, want_partials=True)
+            hb, seth = rgh[:, 0], rgh[:, 1]
             n = len(out)
             hb = np.resize(hb, n) if len(hb) >= n else \
                 np.concatenate([hb, np.zeros(n - len(hb))])
@@ -230,7 +231,11 @@ class TimbreTrack:
             out['RoughnessSethares'] = seth
 
         snd.close()
-        return TrackResult(track_meta, self.params, out)
+        result = TrackResult(track_meta, self.params, out)
+        # Attach the wavelet partials so the player can show the partial-gram
+        # via ``timbre_player(wav, result.features, partials=result.partials)``.
+        result.partials = partials if self.wavelet_roughness else None
+        return result
 
     def _worker(self, idx, func, args, kwargs) -> np.ndarray:
         print(self.feature_names[idx], end=' ... ')
