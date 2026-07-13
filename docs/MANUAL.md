@@ -17,11 +17,12 @@ Computational Music and Sound Archiving: a manual for the
 - [5. API reference](#5-api-reference)
   - [5.1 comsar.PitchTrack](#51-comsarpitchtrack)
   - [5.2 comsar.TimbreTrack](#52-comsartimbretrack)
-  - [5.3 comsar.tracks.utilities](#53-comsartracksutilities)
-  - [5.4 comsar.tracks.helpers](#54-comsartrackshelpers)
-  - [5.5 comsar.viz — interactive player](#55-comsarviz--interactive-player)
-  - [5.6 apollon (backbone)](#56-apollon-backbone)
-  - [5.7 chainsaddiction (Poisson HMM)](#57-chainsaddiction-poisson-hmm)
+  - [5.3 comsar.WaveletRoughness](#53-comsarwaveletroughness)
+  - [5.4 comsar.tracks.utilities](#54-comsartracksutilities)
+  - [5.5 comsar.tracks.helpers](#55-comsartrackshelpers)
+  - [5.6 comsar.viz — interactive player](#56-comsarviz--interactive-player)
+  - [5.7 apollon (backbone)](#57-apollon-backbone)
+  - [5.8 chainsaddiction (Poisson HMM)](#58-chainsaddiction-poisson-hmm)
 - [6. Example notebooks](#6-example-notebooks)
 - [7. Command-line scripts](#7-command-line-scripts)
 - [8. For maintainers: releasing and building wheels](#8-for-maintainers-releasing-and-building-wheels)
@@ -336,7 +337,55 @@ historical behaviour: windowing in samples at one fixed sample rate
 (`extract` raises `ValueError` for files with any other rate). Use this only
 to reproduce old analyses exactly.
 
-### 5.3 comsar.tracks.utilities
+### 5.3 comsar.WaveletRoughness
+
+`WaveletRoughness(window_ms=370.0, overlap=0.5, f_min=50.0, f_max=5000.0, threshold=0.05, freq_step=2.0)`
+
+Roughness (sensory-dissonance) analysis based on a wavelet/Gabor spectrum
+instead of an FFT. Each frame's spectrum is estimated with a Gaussian-windowed
+single-frequency correlation on a *continuous* frequency grid, and the peaks
+are refined to sub-grid precision — so the **partial frequencies are far more
+exact than FFT bins**. From the partials of each frame two roughness measures
+are computed (ported from R. Bader's *Wavelet* application):
+
+* **Helmholtz-Bader** — pairwise roughness that peaks at a beating distance of
+  33 Hz and vanishes beyond 200 Hz.
+* **Sethares** — the Plomp-Levelt / Sethares sensory-dissonance curve.
+
+Parameters (windowing is time-based and sample-rate independent, as in 5.2):
+
+| Parameter | Meaning |
+|---|---|
+| `window_ms`, `overlap` | Analysis window length (ms) and overlap fraction. |
+| `f_min`, `f_max` | Analysed frequency band in Hz (`f_max` clipped to Nyquist). |
+| `threshold` | Keep only partials whose amplitude is at least this fraction (0 < t < 1) of the strongest partial in the file. **This controls how many partial frequencies are found** (larger → fewer). |
+| `freq_step` | Grid spacing in Hz before parabolic peak refinement (smaller = finer/slower). |
+
+`extract(path)` returns a **`RoughnessResult`** with:
+
+* `.features` — DataFrame indexed by `time_s`, columns `RoughnessHelmholtzBader`
+  and `RoughnessSethares` (one value per frame).
+* `.partials` — a **long-format** DataFrame `[time_s, frequency, amplitude]`
+  with one row per detected partial (a variable number of rows per frame).
+* `.partials_by_frame()` — the partials as a list of per-frame DataFrames.
+* `.to_csv(path)` / `.partials_to_csv(path)` — write the two tables.
+
+```python
+from comsar import WaveletRoughness, timbre_player
+
+res = WaveletRoughness(threshold=0.05).extract("my_audio.wav")
+res.features          # RoughnessHelmholtzBader, RoughnessSethares
+res.partials          # time_s, frequency, amplitude (long format)
+
+# both roughness curves + a partial-gram panel (grey = amplitude)
+timbre_player("my_audio.wav", res.features, partials=res.partials)
+```
+
+The standalone functions `comsar.tracks._roughness.helmholtz_bader_roughness`
+and `sethares_roughness` compute a single roughness value from arrays of
+partial frequencies and amplitudes.
+
+### 5.4 comsar.tracks.utilities
 
 - **`TrackResult`** — wraps extracted features together with metadata and
   parameters. Useful methods/properties: `.features` (DataFrame), `.data`
@@ -345,13 +394,13 @@ to reproduce old analyses exactly.
 - **Parameter dataclasses**: `TrackMeta`, `TrackParams`, `TimbreTrackParams`,
   `PitchTrackParams`, `TonalSystemParams`, `ngramParams`.
 
-### 5.4 comsar.tracks.helpers
+### 5.5 comsar.tracks.helpers
 
 Plotting / analysis helpers for Self-Organizing Maps: `init_pca`, `match_counts`,
 `plot_counts`, `plot_umatrix`, `plot_component`, `plot_feature_importance`,
 `mean_feat_dist`, `unit_info`, and more. Used by the SOM example notebooks.
 
-### 5.5 comsar.viz — interactive player
+### 5.6 comsar.viz — interactive player
 
 `timbre_player(wav_path, features, visible=2, width=1000, wave_h=150, feat_h=210)`
 
@@ -376,7 +425,7 @@ timbre_player("my_audio.wav", features, visible=None)   # all features shown
 
 See `examples/TimbreTrack_SimpleExample.ipynb` for a complete walkthrough.
 
-### 5.6 apollon (backbone)
+### 5.7 apollon (backbone)
 
 Key entry points used by comsar and the notebooks:
 
@@ -389,7 +438,7 @@ Key entry points used by comsar and the notebooks:
 - `apollon.hmm` — Hidden Markov Models.
 - `apollon.io.io` — `save_to_pickle`, `load_from_pickle`, JSON I/O.
 
-### 5.7 chainsaddiction (Poisson HMM)
+### 5.8 chainsaddiction (Poisson HMM)
 
 `import chainsaddiction`; the compiled submodules `chainsaddiction.poishmm` and
 `chainsaddiction.utils` provide Poisson HMM fitting (forward–backward, EM). Used
@@ -500,6 +549,12 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
     when building without git tags).
 - **CI**: added `cibuildwheel` configuration and a GitHub Actions workflow to
   build and publish multi-platform wheels (see section 8).
+- **Wavelet roughness (2026-07)**: new `comsar.WaveletRoughness` — Helmholtz-Bader
+  and Sethares roughness per frame from a wavelet/Gabor spectrum with
+  sub-grid-exact partial frequencies (ported from R. Bader's *Wavelet* app), a
+  `threshold` parameter controlling the number of partials, and a long-format
+  partials table. `comsar.viz.timbre_player` gained a `partials=` panel showing
+  the partial frequencies over time (grey = amplitude).
 - **Sample-rate independence (2026-07)**: `TimbreTrack` and `PitchTrack` no
   longer expect 44 100 Hz. Analysis windows are specified in milliseconds plus
   an overlap fraction (`window_ms`, `overlap`) and converted to samples per

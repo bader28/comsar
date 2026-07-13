@@ -17,7 +17,8 @@ except PackageNotFoundError:              # e.g. running from a source checkout
 
 # __version__ is set *before* importing the tracks subpackage, because
 # comsar.tracks._pitch references ``comsar.__version__`` at runtime.
-from .tracks import TimbreTrack, PitchTrack
+from .tracks import TimbreTrack, PitchTrack, WaveletRoughness
 from .viz import timbre_player
 
-__all__ = ["TimbreTrack", "PitchTrack", "timbre_player", "__version__"]
+__all__ = ["TimbreTrack", "PitchTrack", "WaveletRoughness",
+           "timbre_player", "__version__"]

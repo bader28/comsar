@@ -2,7 +2,9 @@
 
 Currently provides :func:`timbre_player`, an audio player that draws the
 waveform in light grey with the extracted feature tracks overlaid in colour,
-plus a play button and a cursor that follows the playback position.
+plus a play button and a cursor that follows the playback position. When a
+table of partials is passed, an additional "partial-gram" panel shows the
+detected partial frequencies over time (grey level = amplitude).
 
 The widget is fully self-contained HTML/JavaScript (the audio is embedded as a
 data URI), so it keeps working when the notebook is exported to HTML.
@@ -51,13 +53,14 @@ _PLAYER_DOC = r"""<!doctype html><html><head><meta charset="utf-8"><style>
   <audio id="au" src="__AUDIO__" preload="auto"></audio>
 <script>
 const D = __PAYLOAD__;
-const W = D.width, WH = D.waveH, FH = D.featH, H = WH + FH;
+const W = D.width, WH = D.waveH, FH = D.featH, PH = D.partH, H = WH + FH + PH;
 D.series.forEach((s,i)=>{ s.on = i < D.visible; });
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const dpr = window.devicePixelRatio || 1;
 cv.width = W*dpr; cv.height = H*dpr; cv.style.height = H+'px'; ctx.scale(dpr,dpr);
 function draw(){
   ctx.clearRect(0,0,W,H);
+  // --- waveform (light grey) ---
   const midY = WH/2, amp = WH/2*0.92;
   ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--wave');
   ctx.lineWidth = 1; ctx.beginPath();
@@ -68,7 +71,8 @@ function draw(){
   ctx.stroke();
   ctx.strokeStyle = '#ececea'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(0,WH+0.5); ctx.lineTo(W,WH+0.5); ctx.stroke();
-  const pad = 12, y0 = WH+pad, y1 = H-pad;
+  // --- feature curves ---
+  const pad = 12, y0 = WH+pad, y1 = WH+FH-pad;
   for(const s of D.series){
     if(!s.on) continue;
     const n = s.v.length;
@@ -81,6 +85,25 @@ function draw(){
     }
     ctx.stroke();
   }
+  // --- partial-gram (detected partial frequencies over time; grey = amplitude) ---
+  if(PH > 0 && D.parts){
+    const top = WH+FH, bot = H, ph = PH;
+    ctx.strokeStyle = '#ececea'; ctx.beginPath();
+    ctx.moveTo(0,top+0.5); ctx.lineTo(W,top+0.5); ctx.stroke();
+    const dur = D.duration || 1, f0 = D.pf0, f1 = D.pf1;
+    const P = D.parts, m = P.t.length, mk = 3;
+    for(let i=0;i<m;i++){
+      const x = P.t[i]/dur*W;
+      const y = bot - (P.f[i]-f0)/(f1-f0)*ph;
+      const g = Math.max(0, Math.min(1, P.a[i]));   // amplitude -> darkness
+      ctx.fillStyle = 'rgba(0,0,0,'+(0.15+0.85*g).toFixed(3)+')';
+      ctx.fillRect(x-mk/2, y-mk/2, mk, mk);
+    }
+    // y-axis frequency labels
+    ctx.fillStyle = '#8a8a86'; ctx.font = '10px sans-serif';
+    ctx.fillText(Math.round(f1)+' Hz', 3, top+11);
+    ctx.fillText(Math.round(f0)+' Hz', 3, bot-3);
+  }
 }
 draw();
 const lg = document.getElementById('legend');
@@ -90,6 +113,11 @@ for(const s of D.series){
   d.title='Click to hide/show this feature';
   d.innerHTML='<span class="sw" style="background:'+s.color+'"></span>'+s.name;
   d.onclick=()=>{ s.on=!s.on; d.classList.toggle('off', !s.on); draw(); };
+  lg.appendChild(d);
+}
+if(PH > 0 && D.parts){
+  const d=document.createElement('span'); d.className='lg'; d.style.cursor='default';
+  d.innerHTML='<span class="sw" style="background:#666"></span>partials (grey = amplitude)';
   lg.appendChild(d);
 }
 const au=document.getElementById('au'), cur=document.getElementById('cursor'),
@@ -115,8 +143,8 @@ cv.onclick=(e)=>{ const r=cv.getBoundingClientRect();
 </script></body></html>"""
 
 
-def timbre_player(wav_path, features, visible=2, width=1000,
-                  wave_h=150, feat_h=210):
+def timbre_player(wav_path, features, visible=2, partials=None,
+                  width=1000, wave_h=150, feat_h=210, partial_h=190):
     """Interactive feature player for Jupyter notebooks.
 
     Draws the waveform of ``wav_path`` in light grey with each feature overlaid
@@ -127,21 +155,28 @@ def timbre_player(wav_path, features, visible=2, width=1000,
     Args:
         wav_path:  Path to the audio file (anything soundfile can read).
         features:  ``pandas.DataFrame`` with one column per feature -- e.g.
-                   ``TimbreTrack().extract(wav).features`` -- or a
-                   ``TrackResult`` (its ``.features`` attribute is used).
+                   ``TimbreTrack().extract(wav).features`` -- or a result object
+                   exposing a ``.features`` attribute.
         visible:   How many features are shown initially (the first ``visible``
-                   columns; the rest start hidden and can be enabled by
-                   clicking the legend). Pass ``None`` to show all.
+                   columns; the rest start hidden and can be enabled by clicking
+                   the legend). Pass ``None`` to show all.
+        partials:  Optional long-format ``pandas.DataFrame`` with columns
+                   ``[time_s, frequency, amplitude]`` (e.g.
+                   ``WaveletRoughness().extract(wav).partials``). When given, an
+                   extra panel shows the partial frequencies over time with the
+                   grey level proportional to amplitude.
         width:     Internal plot width in pixels.
         wave_h:    Height of the waveform panel in pixels.
         feat_h:    Height of the feature panel in pixels.
+        partial_h: Height of the partial-gram panel in pixels (only used when
+                   ``partials`` is given).
 
     Returns:
         ``IPython.display.HTML`` -- renders inline in Jupyter.
     """
     from IPython.display import HTML   # local import: IPython only needed here
 
-    if hasattr(features, "features"):  # accept a TrackResult directly
+    if hasattr(features, "features"):  # accept a result object directly
         features = features.features
 
     # audio: waveform min/max envelope, one column per output pixel
@@ -172,6 +207,24 @@ def timbre_player(wav_path, features, visible=2, width=1000,
         series.append({"name": str(name), "color": palette[k % len(palette)],
                        "v": [round(float(x), 4) for x in vn]})
 
+    # optional partials panel
+    part_h = 0
+    parts = None
+    pf0 = pf1 = 0.0
+    if partials is not None and len(partials) > 0:
+        part_h = partial_h
+        pt = partials["time_s"].to_numpy(dtype=float)
+        pfr = partials["frequency"].to_numpy(dtype=float)
+        pa = partials["amplitude"].to_numpy(dtype=float)
+        amax = max(float(np.nanmax(pa)), 1e-9)
+        pa = np.clip(pa / amax, 0.0, 1.0)
+        pf0 = float(np.nanmin(pfr)); pf1 = float(np.nanmax(pfr))
+        if pf1 <= pf0:
+            pf1 = pf0 + 1.0
+        parts = {"t": [round(float(x), 4) for x in pt],
+                 "f": [round(float(x), 2) for x in pfr],
+                 "a": [round(float(x), 3) for x in pa]}
+
     # embed a small mono 22.05 kHz WAV as a data URI so it is self-contained
     target_sr = 22050
     if sr != target_sr:
@@ -187,17 +240,19 @@ def timbre_player(wav_path, features, visible=2, width=1000,
 
     n_visible = len(series) if visible is None else max(0, int(visible))
     payload = json.dumps({
-        "width": width, "waveH": wave_h, "featH": feat_h, "duration": duration,
-        "visible": n_visible,
+        "width": width, "waveH": wave_h, "featH": feat_h, "partH": part_h,
+        "duration": duration, "visible": n_visible,
+        "pf0": round(pf0, 2), "pf1": round(pf1, 2), "parts": parts,
         "wmin": [round(float(x), 3) for x in wmin],
         "wmax": [round(float(x), 3) for x in wmax],
         "series": series,
     })
     doc = _PLAYER_DOC.replace("__PAYLOAD__", payload).replace("__AUDIO__", audio_uri)
+    total_h = wave_h + feat_h + part_h + 96
     iframe = ('<iframe style="width:100%;max-width:{w}px;height:{h}px;border:0;'
               'overflow:hidden" sandbox="allow-scripts allow-same-origin" '
               'srcdoc="{doc}"></iframe>').format(
-                  w=width + 24, h=wave_h + feat_h + 96, doc=escape(doc, quote=True))
+                  w=width + 24, h=total_h, doc=escape(doc, quote=True))
     # wrapped in a <div> so IPython.display.HTML does not emit its
     # "Consider using IPython.display.IFrame instead" warning
     return HTML("<div>" + iframe + "</div>")
