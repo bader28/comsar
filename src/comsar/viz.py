@@ -298,16 +298,16 @@ def _waveform_envelope(mono, width):
 # ---------------------------------------------------------------------------
 
 _PITCH_DOC = r"""<!doctype html><html><head><meta charset="utf-8"><style>
-  :root{--surface:#fcfcfb;--ink:#0b0b0b;--muted:#52514e;--wave:#d6d6d6;}
+  :root{--surface:#fcfcfb;--ink:#0b0b0b;--muted:#52514e;--wave:#c9c9c7;}
   body{margin:0;font:13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;
        color:var(--ink);background:var(--surface);}
   #wrap{position:relative;}
   canvas{display:block;width:100%;}
   #cursor{position:absolute;top:0;width:2px;background:#0b0b0b;opacity:.55;
-          pointer-events:none;left:0;}
-  #bar{display:flex;align-items:center;gap:12px;padding:8px 4px;}
+          pointer-events:none;left:0;display:none;}
+  #bar{display:flex;align-items:center;gap:8px;padding:8px 4px;flex-wrap:wrap;}
   button{font:600 13px sans-serif;border:1px solid #bbb;border-radius:8px;
-         background:#fff;padding:6px 14px;cursor:pointer;}
+         background:#fff;padding:6px 12px;cursor:pointer;}
   button:hover{background:#f0f0ef;}
   #t{color:var(--muted);font-variant-numeric:tabular-nums;}
   #legend{display:flex;flex-wrap:wrap;gap:10px 16px;padding:2px 4px 8px;}
@@ -316,11 +316,15 @@ _PITCH_DOC = r"""<!doctype html><html><head><meta charset="utf-8"><style>
   .lg.off{color:#b3b2ae;}
   .lg.off .sw{background:#cfcecb !important;}
   .sw{width:14px;height:3px;border-radius:2px;}
+  .hint{color:#8a8a86;}
 </style></head><body>
   <div id="bar">
     <button id="play">&#9654;&nbsp;Play</button>
     <span id="t">0.00 / 0.00 s</span>
-    <span style="color:#8a8a86">&mdash; click the plot to seek</span>
+    <button id="zin">Zoom +</button>
+    <button id="zout">Zoom &minus;</button>
+    <button id="zreset">Reset</button>
+    <span class="hint">&mdash; wheel = zoom, drag = pan, click = seek</span>
   </div>
   <div id="wrap">
     <canvas id="cv"></canvas>
@@ -331,98 +335,216 @@ _PITCH_DOC = r"""<!doctype html><html><head><meta charset="utf-8"><style>
 <script>
 const D = __PAYLOAD__;
 const W = D.width, WH = D.waveH, PH = D.pitchH, H = WH + PH;
-D.tracks.forEach(function(t){ t.on = true; });
+const layers = {waveform:true, impulses:true};
+D.tracks.forEach(function(tr){ tr.on = true; });
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const dpr = window.devicePixelRatio || 1;
 cv.width = W*dpr; cv.height = H*dpr; cv.style.height = H+'px'; ctx.scale(dpr,dpr);
-const lf0 = Math.log(D.fmin), lf1 = Math.log(D.fmax), dur = D.duration || 1;
+const lf0 = Math.log(D.fmin), lf1 = Math.log(D.fmax);
+let T0 = 0, T1 = D.duration;                 // visible time window [s]
+let samples = null, sr = 44100, peak = 1;    // decoded audio (for zoom)
+
+function xOf(t){ return (t - T0) / (T1 - T0) * W; }
+function tOf(x){ return T0 + x / W * (T1 - T0); }
 function yFreq(f){ return WH + PH - (Math.log(f)-lf0)/(lf1-lf0)*PH; }
-function draw(){
-  ctx.clearRect(0,0,W,H);
-  const midY = WH/2, amp = WH/2*0.92;
+
+function clampView(){
+  let span = T1 - T0;
+  if(span > D.duration){ span = D.duration; }
+  if(span < 0.002){ span = 0.002; }
+  if(T0 < 0){ T0 = 0; T1 = span; }
+  if(T1 > D.duration){ T1 = D.duration; T0 = T1 - span; if(T0 < 0) T0 = 0; }
+}
+
+function drawWaveSamples(){
+  const i0 = Math.max(0, Math.floor(T0*sr)), i1 = Math.min(samples.length, Math.ceil(T1*sr));
+  const nSamp = i1 - i0, spp = nSamp / W, mid = WH/2, amp = WH/2*0.92;
   ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--wave');
   ctx.lineWidth = 1; ctx.beginPath();
-  for(let i=0;i<W;i++){
-    ctx.moveTo(i+0.5, midY - D.wmax[i]*amp);
-    ctx.lineTo(i+0.5, midY - D.wmin[i]*amp);
+  if(spp >= 2){
+    for(let c=0;c<W;c++){
+      const a = i0 + Math.floor(c*spp), b = Math.min(i1, i0 + Math.floor((c+1)*spp));
+      let mn = 1e9, mx = -1e9;
+      for(let i=a;i<b;i++){ const v = samples[i]; if(v<mn)mn=v; if(v>mx)mx=v; }
+      if(mn>mx){ mn = mx = 0; }
+      ctx.moveTo(c+0.5, mid - mx/peak*amp);
+      ctx.lineTo(c+0.5, mid - mn/peak*amp);
+    }
+  } else {
+    for(let i=i0;i<i1;i++){
+      const x = (i/sr - T0)/(T1-T0)*W, y = mid - samples[i]/peak*amp;
+      (i===i0)? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
   }
   ctx.stroke();
-  ctx.strokeStyle = '#ececea'; ctx.lineWidth=1;
+}
+
+function drawWaveCoarse(){
+  const mid = WH/2, amp = WH/2*0.92;
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--wave');
+  ctx.lineWidth = 1; ctx.beginPath();
+  const c0 = T0/D.duration*W, c1 = T1/D.duration*W;
+  for(let c=0;c<W;c++){
+    const src = Math.min(W-1, Math.max(0, Math.round(c0 + c/W*(c1-c0))));
+    ctx.moveTo(c+0.5, mid - D.wmax[src]*amp);
+    ctx.lineTo(c+0.5, mid - D.wmin[src]*amp);
+  }
+  ctx.stroke();
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  if(layers.waveform){ samples ? drawWaveSamples() : drawWaveCoarse(); }
+  // impulses as vertical lines over the waveform (grey area), opacity ~ amplitude
+  if(layers.impulses && D.impulses){
+    const it = D.impulses.t, ia = D.impulses.a, m = it.length;
+    ctx.lineWidth = 1;
+    for(let i=0;i<m;i++){
+      if(it[i] < T0 || it[i] > T1) continue;
+      const x = xOf(it[i]);
+      ctx.strokeStyle = 'rgba(217,72,15,' + (0.22 + 0.7*ia[i]).toFixed(3) + ')';
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WH); ctx.stroke();
+    }
+  }
+  // panel separator
+  ctx.strokeStyle = '#ececea'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0,WH+0.5); ctx.lineTo(W,WH+0.5); ctx.stroke();
+  // pitch panel: octave gridlines + labels
   ctx.fillStyle = '#a9a8a4'; ctx.font = '10px sans-serif';
-  ctx.strokeStyle = '#eeeeec'; ctx.lineWidth = 1;
+  ctx.strokeStyle = '#eeeeec';
   let gf = Math.pow(2, Math.ceil(Math.log2(D.fmin)));
   for(; gf < D.fmax; gf *= 2){
     const y = yFreq(gf);
     ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
     ctx.fillText(Math.round(gf)+' Hz', 3, y-2);
   }
+  // f0 tracks (break where f<=0 or outside view)
   for(const tr of D.tracks){
     if(!tr.on) continue;
     ctx.strokeStyle = tr.color; ctx.lineWidth = 2; ctx.lineJoin = 'round';
     const t = tr.t, f = tr.f, n = t.length;
     let started = false;
     for(let i=0;i<n;i++){
-      if(f[i] > 0){
-        const x = t[i]/dur*W;
-        const fc = Math.max(D.fmin, Math.min(D.fmax, f[i]));
-        const y = yFreq(fc);
-        if(!started){ ctx.beginPath(); ctx.moveTo(x,y); started=true; }
-        else ctx.lineTo(x,y);
-      } else if(started){ ctx.stroke(); started=false; }
+      if(t[i] < T0 || t[i] > T1 || f[i] <= 0){ if(started){ ctx.stroke(); started=false; } continue; }
+      const x = xOf(t[i]);
+      const fc = Math.max(D.fmin, Math.min(D.fmax, f[i]));
+      const y = yFreq(fc);
+      if(!started){ ctx.beginPath(); ctx.moveTo(x,y); started=true; } else ctx.lineTo(x,y);
     }
     if(started) ctx.stroke();
   }
+  placeCursor();
 }
-draw();
+let _raf = null;
+function scheduleDraw(){ if(_raf) return; _raf = requestAnimationFrame(function(){ _raf=null; draw(); }); }
+
+// --- legend ---
 const lg = document.getElementById('legend');
-for(const tr of D.tracks){
-  const d=document.createElement('span'); d.className='lg';
-  d.title='Click to hide/show';
-  d.innerHTML='<span class="sw" style="background:'+tr.color+'"></span>'+tr.name;
-  d.onclick=function(){ tr.on=!tr.on; d.classList.toggle('off', !tr.on); draw(); };
+function addChip(name, color, getOn, toggle){
+  const d = document.createElement('span'); d.className = 'lg';
+  if(!getOn()) d.classList.add('off');
+  d.title = 'Click to hide/show';
+  d.innerHTML = '<span class="sw" style="background:'+color+'"></span>'+name;
+  d.onclick = function(){ toggle(); d.classList.toggle('off', !getOn()); scheduleDraw(); };
   lg.appendChild(d);
 }
-const au=document.getElementById('au'), cur=document.getElementById('cursor'),
-      btn=document.getElementById('play'), tlab=document.getElementById('t');
+addChip('waveform', '#c9c9c7', function(){return layers.waveform;}, function(){layers.waveform=!layers.waveform;});
+for(const tr of D.tracks){ (function(tr){
+  addChip(tr.name, tr.color, function(){return tr.on;}, function(){tr.on=!tr.on;});
+})(tr); }
+if(D.impulses){ addChip('impulses', '#d9480f', function(){return layers.impulses;}, function(){layers.impulses=!layers.impulses;}); }
+
+// --- audio + cursor ---
+const au = document.getElementById('au'), cur = document.getElementById('cursor'),
+      btn = document.getElementById('play'), tlab = document.getElementById('t');
 cur.style.height = H+'px';
 const durf = function(){ return (isFinite(au.duration)&&au.duration>0)? au.duration : D.duration; };
 const fmt = function(x){ return x.toFixed(2); };
-function place(){
-  const frac = Math.min(au.currentTime/durf(),1);
-  cur.style.left = (frac*100)+'%';
-  tlab.textContent = fmt(au.currentTime)+' / '+fmt(durf())+' s';
+function placeCursor(){
+  const ct = au.currentTime;
+  if(ct >= T0 && ct <= T1){ cur.style.display='block'; cur.style.left = (xOf(ct)/W*100)+'%'; }
+  else { cur.style.display='none'; }
+  tlab.textContent = fmt(ct)+' / '+fmt(durf())+' s';
 }
-place();
-let raf=null;
-function loop(){ place(); raf=requestAnimationFrame(loop); }
-btn.onclick=function(){ if(au.paused){au.play();} else {au.pause();} };
-au.onplay =function(){ btn.innerHTML='&#10073;&#10073;&nbsp;Pause'; cancelAnimationFrame(raf); loop(); };
-au.onpause=function(){ btn.innerHTML='&#9654;&nbsp;Play'; cancelAnimationFrame(raf); place(); };
-au.onended=function(){ cancelAnimationFrame(raf); au.currentTime=0; place(); };
-cv.style.cursor='pointer';
-cv.onclick=function(e){ const r=cv.getBoundingClientRect();
-  au.currentTime = Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*durf(); place(); };
+let _craf = null;
+function loop(){ placeCursor(); _craf = requestAnimationFrame(loop); }
+btn.onclick = function(){ if(au.paused) au.play(); else au.pause(); };
+au.onplay = function(){ btn.innerHTML='&#10073;&#10073;&nbsp;Pause'; cancelAnimationFrame(_craf); loop(); };
+au.onpause = function(){ btn.innerHTML='&#9654;&nbsp;Play'; cancelAnimationFrame(_craf); placeCursor(); };
+au.onended = function(){ cancelAnimationFrame(_craf); au.currentTime=0; placeCursor(); };
+
+// --- zoom / pan / seek ---
+function zoomAt(tc, factor){
+  let nT0 = tc - (tc - T0)*factor, nT1 = tc + (T1 - tc)*factor;
+  T0 = nT0; T1 = nT1; clampView(); scheduleDraw();
+}
+cv.addEventListener('wheel', function(e){
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const tc = tOf((e.clientX - r.left)/r.width*W);
+  zoomAt(tc, e.deltaY < 0 ? 0.8 : 1.25);
+}, {passive:false});
+document.getElementById('zin').onclick = function(){ zoomAt((T0+T1)/2, 0.6); };
+document.getElementById('zout').onclick = function(){ zoomAt((T0+T1)/2, 1.7); };
+document.getElementById('zreset').onclick = function(){ T0=0; T1=D.duration; scheduleDraw(); };
+let dragging=false, dragMoved=false, lastX=0;
+cv.addEventListener('mousedown', function(e){ dragging=true; dragMoved=false; lastX=e.clientX; });
+window.addEventListener('mousemove', function(e){
+  if(!dragging) return;
+  const r = cv.getBoundingClientRect();
+  const dx = (e.clientX - lastX)/r.width*W; lastX = e.clientX;
+  if(Math.abs(dx) > 0.5) dragMoved = true;
+  const dt = dx/W*(T1-T0); T0 -= dt; T1 -= dt; clampView(); scheduleDraw();
+});
+window.addEventListener('mouseup', function(e){
+  if(dragging && !dragMoved){
+    const r = cv.getBoundingClientRect();
+    au.currentTime = Math.max(0, Math.min(D.duration, tOf((e.clientX - r.left)/r.width*W)));
+    placeCursor();
+  }
+  dragging = false;
+});
+cv.style.cursor = 'crosshair';
+
+// --- decode embedded audio for sample-accurate zoom ---
+const AC = window.AudioContext || window.webkitAudioContext;
+if(AC){
+  try{
+    const ac = new AC();
+    fetch(au.src).then(function(r){ return r.arrayBuffer(); })
+      .then(function(b){ return ac.decodeAudioData(b); })
+      .then(function(buf){
+        samples = buf.getChannelData(0); sr = buf.sampleRate;
+        let mx = 1e-9; for(let i=0;i<samples.length;i+=7){ const v=Math.abs(samples[i]); if(v>mx)mx=v; }
+        peak = mx; scheduleDraw();
+      }).catch(function(){});
+  }catch(e){}
+}
+draw();
 </script></body></html>"""
 
 
-def pitch_player(wav_path, result, pitch_col="Pitch", fmin=None, fmax=None,
-                 width=1000, wave_h=140, pitch_h=280):
-    """Interactive f0 / pitch player for Jupyter notebooks.
+def pitch_player(wav_path, result, impulses=None, pitch_col="Pitch",
+                 fmin=None, fmax=None, width=1000, wave_h=190, pitch_h=250):
+    """Interactive f0 / pitch player for Jupyter notebooks, with zoom.
 
     Draws the waveform of ``wav_path`` in light grey and the fundamental
     frequency (f0) track on a logarithmic frequency axis, with a play button
     and a vertical cursor that follows the audio. Unvoiced frames (f0 <= 0)
-    leave a gap in the line. Further pitch-track layers (melody, tonal system,
-    ...) can be added later.
+    leave a gap. The plot supports **horizontal zoom** (mouse wheel or the
+    Zoom buttons), **pan** (drag) and **seek** (click); the waveform is
+    re-rendered from the decoded audio down to sample level.
 
     Args:
         wav_path:   Path to the audio file.
         result:     A ``PitchTrack`` result (uses ``.features``) or a DataFrame
                     indexed by ``time_s`` containing a pitch column.
+        impulses:   Optional ``ImpulsePattern`` result or a DataFrame with
+                    ``[time_s, amplitude]``. When given, the impulses are drawn
+                    as vertical lines over the waveform (opacity ~ amplitude),
+                    toggleable via the legend.
         pitch_col:  Name of the f0 column (default ``"Pitch"``).
-        fmin, fmax: Frequency-axis limits in Hz; by default derived from the
-                    voiced f0 values.
+        fmin, fmax: Frequency-axis limits in Hz; by default the voiced f0 range.
         width:      Internal plot width in pixels.
         wave_h:     Height of the waveform panel in pixels.
         pitch_h:    Height of the pitch panel in pixels.
@@ -455,15 +577,26 @@ def pitch_player(wav_path, result, pitch_col="Pitch", fmin=None, fmax=None,
                "t": [round(float(x), 4) for x in times],
                "f": [round(float(x), 3) for x in f0]}]
 
+    imp_payload = None
+    if impulses is not None:
+        imp_df = impulses.impulses if hasattr(impulses, "impulses") else impulses
+        if len(imp_df) > 0:
+            it = imp_df["time_s"].to_numpy(dtype=float)
+            ia = imp_df["amplitude"].to_numpy(dtype=float)
+            amax = max(float(np.nanmax(ia)), 1e-12)
+            ia = np.clip(ia / amax, 0.0, 1.0)
+            imp_payload = {"t": [round(float(x), 5) for x in it],
+                           "a": [round(float(x), 3) for x in ia]}
+
     payload = json.dumps({
         "width": width, "waveH": wave_h, "pitchH": pitch_h,
         "duration": duration, "fmin": round(fmin, 3), "fmax": round(fmax, 3),
         "wmin": [round(float(x), 3) for x in wmin],
         "wmax": [round(float(x), 3) for x in wmax],
-        "tracks": tracks,
+        "tracks": tracks, "impulses": imp_payload,
     })
     doc = _PITCH_DOC.replace("__PAYLOAD__", payload).replace("__AUDIO__", audio_uri)
-    total_h = wave_h + pitch_h + 96
+    total_h = wave_h + pitch_h + 120
     iframe = ('<iframe style="width:100%;max-width:{w}px;height:{h}px;border:0;'
               'overflow:hidden" sandbox="allow-scripts allow-same-origin" '
               'srcdoc="{doc}"></iframe>').format(

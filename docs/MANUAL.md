@@ -18,11 +18,12 @@ Computational Music and Sound Archiving: a manual for the
   - [5.1 comsar.PitchTrack](#51-comsarpitchtrack)
   - [5.2 comsar.TimbreTrack](#52-comsartimbretrack)
   - [5.3 comsar.WaveletRoughness](#53-comsarwaveletroughness)
-  - [5.4 comsar.tracks.utilities](#54-comsartracksutilities)
-  - [5.5 comsar.tracks.helpers](#55-comsartrackshelpers)
-  - [5.6 comsar.viz — interactive player](#56-comsarviz--interactive-player)
-  - [5.7 apollon (backbone)](#57-apollon-backbone)
-  - [5.8 chainsaddiction (Poisson HMM)](#58-chainsaddiction-poisson-hmm)
+  - [5.4 comsar.ImpulsePattern](#54-comsarimpulsepattern)
+  - [5.5 comsar.tracks.utilities](#55-comsartracksutilities)
+  - [5.6 comsar.tracks.helpers](#56-comsartrackshelpers)
+  - [5.7 comsar.viz — interactive players](#57-comsarviz--interactive-players)
+  - [5.8 apollon (backbone)](#58-apollon-backbone)
+  - [5.9 chainsaddiction (Poisson HMM)](#59-chainsaddiction-poisson-hmm)
 - [6. Example notebooks](#6-example-notebooks)
 - [7. Command-line scripts](#7-command-line-scripts)
 - [8. For maintainers: releasing and building wheels](#8-for-maintainers-releasing-and-building-wheels)
@@ -393,7 +394,41 @@ The standalone functions `comsar.tracks._roughness.bader_helmholtz_roughness`
 and `sethares_roughness` compute a single roughness value from arrays of
 partial frequencies and amplitudes.
 
-### 5.4 comsar.tracks.utilities
+### 5.4 comsar.ImpulsePattern
+
+`ImpulsePattern(dbmin=52.0)` with `extract(wav_path, pitch_result)`
+
+Turns the waveform into a sequence of **impulses**, one per pitch period
+`T = 1 / f0`. The onset of each impulse is
+
+* a **rising** zero crossing of the waveform (negative → positive), and
+* the zero crossing **before the strongest amplitude** within `T`.
+
+Only parts whose level is above `dbmin` (SPL in dB, default **52**) are
+analysed; silence resets the chain. Starting from the first impulse after
+silence, the next impulse is placed one period ahead where the local pitch
+gives the new `T`. Sustained tones therefore give a fairly regular impulse
+pattern, transients / noise a complex one. Each impulse stores the maximum
+`|amplitude|` until the next impulse.
+
+`extract` takes the audio path and a `PitchTrack` result (it uses the `Pitch`
+and `SPL` columns) and returns an **`ImpulsePatternResult`** whose `.impulses`
+is a list-like DataFrame `[time_s, amplitude]` — one row per impulse, analogous
+to the pitch track (`.to_csv(path)` writes it).
+
+```python
+from comsar import PitchTrack, ImpulsePattern, pitch_player
+
+pr = PitchTrack(window_ms=25.0, overlap=0.6).extract("my_audio.wav")
+ip = ImpulsePattern(dbmin=52.0).extract("my_audio.wav", pr)
+ip.impulses          # time_s, amplitude
+
+pitch_player("my_audio.wav", pr, impulses=ip)   # impulses as vertical lines
+```
+
+See `examples/PitchTrack_f0_Extract.ipynb`.
+
+### 5.5 comsar.tracks.utilities
 
 - **`TrackResult`** — wraps extracted features together with metadata and
   parameters. Useful methods/properties: `.features` (DataFrame), `.data`
@@ -402,13 +437,13 @@ partial frequencies and amplitudes.
 - **Parameter dataclasses**: `TrackMeta`, `TrackParams`, `TimbreTrackParams`,
   `PitchTrackParams`, `TonalSystemParams`, `ngramParams`.
 
-### 5.5 comsar.tracks.helpers
+### 5.6 comsar.tracks.helpers
 
 Plotting / analysis helpers for Self-Organizing Maps: `init_pca`, `match_counts`,
 `plot_counts`, `plot_umatrix`, `plot_component`, `plot_feature_importance`,
 `mean_feat_dist`, `unit_info`, and more. Used by the SOM example notebooks.
 
-### 5.6 comsar.viz — interactive player
+### 5.7 comsar.viz — interactive players
 
 `timbre_player(wav_path, features, visible=2, width=1000, wave_h=150, feat_h=210)`
 
@@ -438,9 +473,14 @@ See `examples/TimbreTrack_SimpleExample.ipynb` for a complete walkthrough.
 A companion player for pitch tracks: the waveform is drawn in light grey and the
 fundamental frequency `f0` (from `result`, a `PitchTrack` result or a DataFrame
 with a `Pitch` column indexed by `time_s`) is drawn on a **logarithmic frequency
-axis**, with the same play button, cursor and click-to-seek. Unvoiced frames
-(`f0 <= 0`) leave a gap in the line; `fmin`/`fmax` default to the voiced f0
-range. Also re-exported at the top level: `from comsar import pitch_player`.
+axis**, with the same play button and cursor. It also supports **horizontal zoom**
+(mouse wheel or Zoom buttons), **pan** (drag) and **seek** (click); the waveform
+is re-rendered from the decoded audio down to sample level. Unvoiced frames
+(`f0 <= 0`) leave a gap; `fmin`/`fmax` default to the voiced f0 range. Pass an
+`impulses=` argument (an `ImpulsePattern` result or a `[time_s, amplitude]`
+DataFrame, see 5.4) to draw the impulses as vertical lines over the waveform
+(opacity ~ amplitude). Waveform, f0 and impulses are toggleable via the legend.
+Also re-exported at the top level: `from comsar import pitch_player`.
 
 ```python
 from comsar import PitchTrack, pitch_player
@@ -452,7 +492,7 @@ pitch_player("my_audio.wav", result)
 See `examples/PitchTrack_f0_Extract.ipynb`. Further pitch-track layers (melody,
 tonal system) will be added to this player in later stages.
 
-### 5.7 apollon (backbone)
+### 5.8 apollon (backbone)
 
 Key entry points used by comsar and the notebooks:
 
@@ -465,7 +505,7 @@ Key entry points used by comsar and the notebooks:
 - `apollon.hmm` — Hidden Markov Models.
 - `apollon.io.io` — `save_to_pickle`, `load_from_pickle`, JSON I/O.
 
-### 5.8 chainsaddiction (Poisson HMM)
+### 5.9 chainsaddiction (Poisson HMM)
 
 `import chainsaddiction`; the compiled submodules `chainsaddiction.poishmm` and
 `chainsaddiction.utils` provide Poisson HMM fitting (forward–backward, EM). Used
@@ -576,6 +616,11 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
     when building without git tags).
 - **CI**: added `cibuildwheel` configuration and a GitHub Actions workflow to
   build and publish multi-platform wheels (see section 8).
+- **Impulse pattern (2026-07)**: new `comsar.ImpulsePattern` extracts an impulse
+  per pitch period (rising zero crossing before the strongest amplitude within
+  `T = 1/f0`, gated by SPL `dbmin`), returning a `[time_s, amplitude]` list. The
+  pitch player gained horizontal zoom/pan and an `impulses=` overlay of vertical
+  impulse lines over the waveform.
 - **Pitch player (2026-07)**: new `comsar.pitch_player` (in `comsar.viz`) shows
   the f0 track on a log-frequency axis over the waveform, with play button and
   cursor; `PitchTrack_f0_Extract.ipynb` reworked to a single-file f0 example.
