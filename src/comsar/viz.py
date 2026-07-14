@@ -335,7 +335,7 @@ _PITCH_DOC = r"""<!doctype html><html><head><meta charset="utf-8"><style>
 <script>
 const D = __PAYLOAD__;
 const W = D.width, WH = D.waveH, PH = D.pitchH, H = WH + PH;
-const layers = {waveform:true, impulses:true};
+const layers = {waveform:true, impulses:true, notes:true, scale:true};
 D.tracks.forEach(function(tr){ tr.on = true; });
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const dpr = window.devicePixelRatio || 1;
@@ -418,6 +418,15 @@ function draw(){
     ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
     ctx.fillText(Math.round(gf)+' Hz', 3, y-2);
   }
+  // tonal-system reference lines (scale degrees over every octave)
+  if(layers.scale && D.scale){
+    ctx.strokeStyle = 'rgba(27,175,122,0.55)'; ctx.lineWidth = 1;
+    for(const sf of D.scale){
+      if(sf < D.fmin || sf > D.fmax) continue;
+      const y = yFreq(sf);
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    }
+  }
   // f0 tracks (break where f<=0 or outside view)
   for(const tr of D.tracks){
     if(!tr.on) continue;
@@ -432,6 +441,20 @@ function draw(){
       if(!started){ ctx.beginPath(); ctx.moveTo(x,y); started=true; } else ctx.lineTo(x,y);
     }
     if(started) ctx.stroke();
+  }
+  // melody: detected notes as horizontal bars
+  if(layers.notes && D.notes){
+    const ns=D.notes.s, ne=D.notes.e, nf=D.notes.f, m=ns.length;
+    ctx.strokeStyle = '#008300'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+    for(let i=0;i<m;i++){
+      if(ne[i] < T0 || ns[i] > T1 || nf[i] <= 0) continue;
+      const y = yFreq(Math.max(D.fmin, Math.min(D.fmax, nf[i])));
+      ctx.beginPath();
+      ctx.moveTo(xOf(Math.max(ns[i], T0)), y);
+      ctx.lineTo(xOf(Math.min(ne[i], T1)), y);
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
   }
   placeCursor();
 }
@@ -453,6 +476,8 @@ for(const tr of D.tracks){ (function(tr){
   addChip(tr.name, tr.color, function(){return tr.on;}, function(){tr.on=!tr.on;});
 })(tr); }
 if(D.impulses){ addChip('impulses', '#d9480f', function(){return layers.impulses;}, function(){layers.impulses=!layers.impulses;}); }
+if(D.notes){ addChip('notes (melody)', '#008300', function(){return layers.notes;}, function(){layers.notes=!layers.notes;}); }
+if(D.scale){ addChip('tonal system', '#1baf7a', function(){return layers.scale;}, function(){layers.scale=!layers.scale;}); }
 
 // --- audio + cursor ---
 const au = document.getElementById('au'), cur = document.getElementById('cursor'),
@@ -524,8 +549,9 @@ draw();
 </script></body></html>"""
 
 
-def pitch_player(wav_path, result, impulses=None, pitch_col="Pitch",
-                 fmin=None, fmax=None, width=1000, wave_h=190, pitch_h=250):
+def pitch_player(wav_path, result, impulses=None, notes=None, tonal_system=None,
+                 pitch_col="Pitch", fmin=None, fmax=None, width=1000,
+                 wave_h=190, pitch_h=250):
     """Interactive f0 / pitch player for Jupyter notebooks, with zoom.
 
     Draws the waveform of ``wav_path`` in light grey and the fundamental
@@ -573,6 +599,21 @@ def pitch_player(wav_path, result, impulses=None, pitch_col="Pitch",
     if fmax <= fmin:
         fmax = fmin * 2.0
 
+    notes_payload = None
+    if notes is not None:
+        ndf = notes.notes if hasattr(notes, "notes") else notes
+        if len(ndf) > 0:
+            notes_payload = {"s": [round(float(v), 4) for v in ndf["start_s"]],
+                             "e": [round(float(v), 4) for v in ndf["stop_s"]],
+                             "f": [round(float(v), 3) for v in ndf["frequency"]]}
+    scale_payload = None
+    if tonal_system is not None:
+        if hasattr(tonal_system, "scale_frequencies"):
+            scale_payload = [round(float(v), 3)
+                             for v in tonal_system.scale_frequencies(f_lo=fmin, f_hi=fmax)]
+        else:
+            scale_payload = [round(float(v), 3) for v in tonal_system]
+
     tracks = [{"name": "f0 (" + str(pitch_col) + ")", "color": "#2a78d6",
                "t": [round(float(x), 4) for x in times],
                "f": [round(float(x), 3) for x in f0]}]
@@ -594,6 +635,7 @@ def pitch_player(wav_path, result, impulses=None, pitch_col="Pitch",
         "wmin": [round(float(x), 3) for x in wmin],
         "wmax": [round(float(x), 3) for x in wmax],
         "tracks": tracks, "impulses": imp_payload,
+        "notes": notes_payload, "scale": scale_payload,
     })
     doc = _PITCH_DOC.replace("__PAYLOAD__", payload).replace("__AUDIO__", audio_uri)
     total_h = wave_h + pitch_h + 120

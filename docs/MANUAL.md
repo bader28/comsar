@@ -271,7 +271,27 @@ carries the frame time in seconds (`time_s`) as its index. Passing a legacy
   Extract the pitch (auto-correlation based f0) and sound-pressure-level track.
   `input1` is a WAV path (string) or a signal array; for an array pass the sample
   rate as `input2` and an optional source label as `input3`.
-- **`extract_TonalSystem(data, dcent, dts, minlen, mindev, noctaves, f0)`**
+- **`notes(pitch_result, dcent=1, minlen=15, mindev=60, noctaves=8, f0=27.5, dts=0.1)`**
+  Detect the **melody**: segment the f0 track (a `PitchTrack` result) into notes
+  — runs of at least `minlen` frames whose pitch stays within `mindev` cent of
+  its mean. Returns a DataFrame (one row per note) with `[start_s, stop_s,
+  duration_s, frequency, cent, midi]` (times in seconds, pitch in Hz / cent
+  above `f0` / MIDI number).
+- **`tonal_system(pitch_result, dcent=1, minlen=15, mindev=60, noctaves=8, f0=27.5, dts=0.1, n_best=10)`**
+  Determine the **tonal system**: correlate the measured pitches (accumulated
+  into one octave) with 900+ theoretical scales (`scales.csv`). Returns a
+  **`TonalSystemResult`** with `.scales` (DataFrame `[rank, name, correlation,
+  degrees_cent]`), `.best` (the top scale), `.octave` (measured one-octave
+  distribution), `.fundamental` (Hz), `.notes` (the melody), and
+  `.scale_frequencies(f_lo, f_hi, rank=0)` giving the scale-degree frequencies
+  across octaves (used by the player as reference lines).
+
+  ```python
+  pr    = PitchTrack(window_ms=25.0, overlap=0.6).extract("my_audio.wav")
+  notes = PitchTrack().notes(pr)          # melody: start_s, stop_s, frequency, ...
+  ts    = PitchTrack().tonal_system(pr)   # ts.best["name"], ts.scales, ts.octave
+  ```
+- **`extract_TonalSystem(data, dcent, dts, minlen, mindev, noctaves, f0)`** *(low-level)*
   From a sequence of segment frequencies, detect notes and estimate the tonal
   system by correlating the accumulated pitch histogram against 900+ theoretical
   scales (bundled as `scales.csv`). Returns a tuple
@@ -468,25 +488,36 @@ timbre_player("my_audio.wav", features, visible=None)   # all features shown
 
 See `examples/TimbreTrack_SimpleExample.ipynb` for a complete walkthrough.
 
-**`pitch_player(wav_path, result, pitch_col="Pitch", fmin=None, fmax=None, width=1000, wave_h=140, pitch_h=280)`**
+**`pitch_player(wav_path, result, impulses=None, notes=None, tonal_system=None, pitch_col="Pitch", fmin=None, fmax=None, width=1000, wave_h=190, pitch_h=250)`**
 
 A companion player for pitch tracks: the waveform is drawn in light grey and the
 fundamental frequency `f0` (from `result`, a `PitchTrack` result or a DataFrame
 with a `Pitch` column indexed by `time_s`) is drawn on a **logarithmic frequency
-axis**, with the same play button and cursor. It also supports **horizontal zoom**
+axis**, with the same play button and cursor. It supports **horizontal zoom**
 (mouse wheel or Zoom buttons), **pan** (drag) and **seek** (click); the waveform
 is re-rendered from the decoded audio down to sample level. Unvoiced frames
-(`f0 <= 0`) leave a gap; `fmin`/`fmax` default to the voiced f0 range. Pass an
-`impulses=` argument (an `ImpulsePattern` result or a `[time_s, amplitude]`
-DataFrame, see 5.4) to draw the impulses as vertical lines over the waveform
-(opacity ~ amplitude). Waveform, f0 and impulses are toggleable via the legend.
+(`f0 <= 0`) leave a gap; `fmin`/`fmax` default to the voiced f0 range.
+
+Optional overlays (each toggleable via the legend):
+
+* `impulses=` — an `ImpulsePattern` result or `[time_s, amplitude]` DataFrame
+  (see 5.4): impulses as orange vertical lines over the waveform.
+* `notes=` — the melody (`PitchTrack.notes` DataFrame, or a `TonalSystemResult`):
+  green horizontal bars, one per note.
+* `tonal_system=` — a `TonalSystemResult` (or a list of frequencies): the scale
+  degrees as teal reference lines repeated over every octave.
+
 Also re-exported at the top level: `from comsar import pitch_player`.
 
 ```python
-from comsar import PitchTrack, pitch_player
+from comsar import PitchTrack, ImpulsePattern, pitch_player
 
-result = PitchTrack(window_ms=25.0, overlap=0.6).extract("my_audio.wav")
-pitch_player("my_audio.wav", result)
+pt     = PitchTrack(window_ms=25.0, overlap=0.6)
+result = pt.extract("my_audio.wav")
+imp    = ImpulsePattern().extract("my_audio.wav", result)
+notes  = pt.notes(result)
+ts     = pt.tonal_system(result)
+pitch_player("my_audio.wav", result, impulses=imp, notes=notes, tonal_system=ts)
 ```
 
 See `examples/PitchTrack_f0_Extract.ipynb`. Further pitch-track layers (melody,
@@ -616,6 +647,12 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
     when building without git tags).
 - **CI**: added `cibuildwheel` configuration and a GitHub Actions workflow to
   build and publish multi-platform wheels (see section 8).
+- **Melody & tonal system (2026-07)**: `PitchTrack.notes` (melody: notes with
+  start/stop/frequency/cent/MIDI) and `PitchTrack.tonal_system` (best-matching
+  scales from `scales.csv`, `TonalSystemResult`) wrap the verified
+  `extract_TonalSystem` algorithm with clean per-second/Hz outputs. The pitch
+  player gained `notes=` (green bars) and `tonal_system=` (teal scale reference
+  lines) overlays.
 - **Impulse pattern (2026-07)**: new `comsar.ImpulsePattern` extracts an impulse
   per pitch period (rising zero crossing before the strongest amplitude within
   `T = 1/f0`, gated by SPL `dbmin`), returning a `[time_s, amplitude]` list. The

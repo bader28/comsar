@@ -30,7 +30,7 @@ for the feature/pitch/timbre extraction notebooks.
 | `WaveletRoughness_Example.ipynb` | Wavelet/Gabor roughness: Bader/Helmholtz and Sethares roughness per frame plus exact partial frequencies; player with both roughness curves and a partial-gram panel (grey = amplitude). |
 | `Feature_Extract_From_Wav.ipynb` | Extract low-level audio features from a WAV file with apollon. |
 | `TimbreTrack_Extract_Features.ipynb` | Compute a `TimbreTrack` (spectral/timbre feature track) from audio. |
-| `PitchTrack_f0_Extract.ipynb` | Pitch track stages 1–2: extract the fundamental frequency (f0) and the **impulse pattern** (`ImpulsePattern`) from a WAV file, save both as CSV, and view them in the interactive `pitch_player` (grey waveform + f0 on a log axis + impulses as vertical lines, with play button, cursor and horizontal zoom). |
+| `PitchTrack_f0_Extract.ipynb` | The full pitch-track pipeline: **f0**, **impulse pattern**, **melody/notes** (`PitchTrack.notes`) and **tonal system** (`PitchTrack.tonal_system`), saved as CSV and shown together in the interactive `pitch_player` (waveform, f0, impulse lines, note bars and tonal-system reference lines, with play/cursor and horizontal zoom). |
 | `PitchTrack_Melody.ipynb` | Turn a pitch track into a melody (note segmentation). |
 | `PitchTrack_Note_TonalSystem_Extract.ipynb` | Detect notes and estimate the tonal system / scale (`extract_TonalSystem`). |
 | `SOM.ipynb` | Train a Self-Organizing Map on extracted features (apollon SOM). |

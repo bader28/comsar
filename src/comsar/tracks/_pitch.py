@@ -452,6 +452,81 @@ class PitchTrack:
 	
         return ngrams, notesinngram
 
+    # ------------------------------------------------------------------
+    # Stage 3+4: melody / notes and tonal system (clean wrappers around the
+    # verified ``extract_TonalSystem`` algorithm; frames -> seconds/Hz).
+    # ------------------------------------------------------------------
+    def _analyse_scale(self, pitch_result, dcent, dts, minlen, mindev,
+                       noctaves, f0):
+        feats = pitch_result.features if hasattr(pitch_result, 'features') \
+            else pitch_result
+        data = np.asarray(feats['Pitch'].to_numpy(), dtype=float)
+        frame_t = np.asarray(feats.index, dtype=float)
+        res = self.extract_TonalSystem(data, dcent, dts, minlen, mindev,
+                                       noctaves, f0)
+        return res, frame_t
+
+    @staticmethod
+    def _notes_df(notes, frame_t, f0):
+        nf = frame_t.size
+        rows = []
+        for nt in notes:
+            s = int(nt.start); e = int(nt.stop)
+            start_s = float(frame_t[min(s, nf - 1)]) if nf else 0.0
+            stop_s = float(frame_t[min(e, nf - 1)]) if nf else 0.0
+            cent = float(nt.arg1)
+            freq = f0 * 2.0 ** (cent / 1200.0)
+            midi = int(round(69 + 12 * np.log2(freq / 440.0))) if freq > 0 else 0
+            rows.append({'start_s': round(start_s, 6), 'stop_s': round(stop_s, 6),
+                         'duration_s': round(stop_s - start_s, 6),
+                         'frequency': round(freq, 3), 'cent': round(cent, 1),
+                         'midi': midi})
+        return pd.DataFrame(rows, columns=['start_s', 'stop_s', 'duration_s',
+                                           'frequency', 'cent', 'midi'])
+
+    def notes(self, pitch_result, dcent=1, minlen=15, mindev=60, noctaves=8,
+              f0=27.5, dts=0.1):
+        """Detect the **melody**: segment the f0 track into notes.
+
+        A note is a run of at least ``minlen`` frames whose pitch stays within
+        ``mindev`` cent of its mean. Returns a DataFrame (one row per note) with
+        ``[start_s, stop_s, duration_s, frequency, cent, midi]`` -- times in
+        seconds, pitch in Hz / cent above ``f0`` / MIDI number.
+
+        Args:
+            pitch_result:  A :class:`PitchTrack` result (or its ``.features``).
+            dcent:         Pitch resolution in cent.
+            minlen:        Minimum note length in frames.
+            mindev:        Maximum pitch deviation within a note, in cent.
+            noctaves, f0:  Analysed octave span and reference frequency (Hz).
+        """
+        res, frame_t = self._analyse_scale(pitch_result, dcent, dts, minlen,
+                                           mindev, noctaves, f0)
+        return self._notes_df(res[8], frame_t, f0)
+
+    def tonal_system(self, pitch_result, dcent=1, minlen=15, mindev=60,
+                     noctaves=8, f0=27.5, dts=0.1, n_best=10):
+        """Determine the **tonal system** (scale) of the recording.
+
+        The measured pitches are accumulated into one octave and correlated
+        with 900+ theoretical scales (``scales.csv``). Returns a
+        :class:`TonalSystemResult` with the best-matching scales, the measured
+        one-octave distribution and the detected notes (melody).
+        """
+        res, frame_t = self._analyse_scale(pitch_result, dcent, dts, minlen,
+                                           mindev, noctaves, f0)
+        c, co, maxf, retNames, retScale, retValue, retCorr, nnotes, nts, cn = res
+        scales = []
+        for i in range(min(n_best, len(retNames))):
+            degrees = [0] + [int(v) for v in retScale[i] if v > 0]
+            scales.append({'rank': i + 1, 'name': str(retNames[i]),
+                           'correlation': float(retCorr[i]),
+                           'degrees_cent': degrees})
+        scales_df = pd.DataFrame(scales)
+        note_df = self._notes_df(nts, frame_t, f0)
+        return TonalSystemResult(scales_df, np.asarray(co, dtype=float),
+                                 float(maxf), float(f0), note_df)
+
     def _worker(self, idx, func, args, kwargs) -> np.ndarray:
         print(self.feature_names[idx], end=' ... ')
         pace = timer()
@@ -460,6 +535,57 @@ class PitchTrack:
         self.pace[idx] = pace
         print(f'{pace:.4} s.')
         return res
+
+
+class TonalSystemResult:
+    """Result of :meth:`PitchTrack.tonal_system`.
+
+    Attributes:
+        scales:       DataFrame of the best-matching scales, columns
+                      ``[rank, name, correlation, degrees_cent]`` (``degrees_cent``
+                      is a list of scale-step positions in cent within an octave,
+                      the tonic included as 0).
+        octave:       measured one-octave pitch distribution (array of length
+                      ``1200 / dcent``) -- the "measured tonal system".
+        fundamental:  strongest frequency of the recording in Hz.
+        f0_ref:       reference frequency used for the cent axis (Hz).
+        notes:        melody DataFrame (see :meth:`PitchTrack.notes`).
+    """
+    def __init__(self, scales, octave, fundamental, f0_ref, notes):
+        self.scales = scales
+        self.octave = octave
+        self.fundamental = fundamental
+        self.f0_ref = f0_ref
+        self.notes = notes
+
+    @property
+    def best(self):
+        """The single best-matching scale (a Series), or ``None``."""
+        return self.scales.iloc[0] if len(self.scales) else None
+
+    def scale_frequencies(self, f_lo=20.0, f_hi=8000.0, rank=0):
+        """Absolute frequencies (Hz) of the ``rank``-th scale's degrees.
+
+        The scale (its cent degrees within an octave) is laid out over every
+        octave between ``f_lo`` and ``f_hi``, anchored to the recording's
+        fundamental. Useful to draw the tonal system as reference lines.
+        """
+        if len(self.scales) == 0:
+            return []
+        degrees = self.scales.iloc[rank]['degrees_cent']
+        base = self.fundamental if self.fundamental > 0 else self.f0_ref
+        while base > f_lo * 2.0:
+            base /= 2.0
+        freqs = []
+        for o in range(0, 12):
+            for d in degrees:
+                fr = base * 2.0 ** (o + d / 1200.0)
+                if f_lo <= fr <= f_hi:
+                    freqs.append(fr)
+            if base * 2.0 ** o > f_hi:
+                break
+        return sorted(set(round(f, 3) for f in freqs))
+
 
 def acf_pitch(sig: np.ndarray, fps: int, **kwargs) -> np.ndarray:
     """Pitch estimation with auto-correlation."""
