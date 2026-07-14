@@ -13,7 +13,7 @@ try:
     # Distribution name on PyPI is "bader-comsar"; the import name stays "comsar".
     __version__ = _version("bader-comsar")
 except PackageNotFoundError:              # e.g. running from a source checkout
-    __version__ = "0.0.5"
+    __version__ = "0.0.6"
 
 # __version__ is set *before* importing the tracks subpackage, because
 # comsar.tracks._pitch references ``comsar.__version__`` at runtime.

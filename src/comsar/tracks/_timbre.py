@@ -74,7 +74,7 @@ class TimbreTrack:
             window:            Window function for the STFT.
             n_fft:             FFT length; ``None`` uses the window size.
             wavelet_roughness: If ``True`` (default), two extra columns
-                               ``RoughnessHelmholtzBader`` and
+                               ``RoughnessBader/Helmholtz`` and
                                ``RoughnessSethares`` from the wavelet
                                :class:`WaveletRoughness` analysis are appended
                                to the feature table.
@@ -206,7 +206,7 @@ class TimbreTrack:
         out.index = np.round(np.arange(len(out)) * (hop / fps), 6)
         out.index.name = 'time_s'
 
-        # Optionally append the two wavelet roughness columns (Helmholtz-Bader,
+        # Optionally append the two wavelet roughness columns (Bader/Helmholtz,
         # Sethares) computed on the same signal with matching windowing.
         if self.wavelet_roughness:
             from ._roughness import WaveletRoughness
@@ -227,7 +227,7 @@ class TimbreTrack:
                 np.concatenate([hb, np.zeros(n - len(hb))])
             seth = np.resize(seth, n) if len(seth) >= n else \
                 np.concatenate([seth, np.zeros(n - len(seth))])
-            out['RoughnessHelmholtzBader'] = hb
+            out['RoughnessBader/Helmholtz'] = hb
             out['RoughnessSethares'] = seth
 
         snd.close()

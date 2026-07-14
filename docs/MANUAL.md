@@ -296,7 +296,7 @@ Computes a track of seven timbre features from an audio file:
 frame time in seconds, `time_s`).
 
 By default (`wavelet_roughness=True`) two further columns,
-`RoughnessHelmholtzBader` and `RoughnessSethares`, are appended from the wavelet
+`RoughnessBader/Helmholtz` and `RoughnessSethares`, are appended from the wavelet
 roughness analysis (see 5.3), computed on the same frames — so the table has
 nine columns. Pass `wavelet_roughness=False` to skip them (faster), or
 `roughness_params={...}` to forward `f_min`/`f_max`/`threshold`/`freq_step` to
@@ -356,7 +356,7 @@ are refined to sub-grid precision — so the **partial frequencies are far more
 exact than FFT bins**. From the partials of each frame two roughness measures
 are computed (ported from R. Bader's *Wavelet* application):
 
-* **Helmholtz-Bader** — pairwise roughness that peaks at a beating distance of
+* **Bader/Helmholtz** — pairwise roughness that peaks at a beating distance of
   33 Hz and vanishes beyond 200 Hz.
 * **Sethares** — the Plomp-Levelt / Sethares sensory-dissonance curve.
 
@@ -371,7 +371,7 @@ Parameters (windowing is time-based and sample-rate independent, as in 5.2):
 
 `extract(path)` returns a **`RoughnessResult`** with:
 
-* `.features` — DataFrame indexed by `time_s`, columns `RoughnessHelmholtzBader`
+* `.features` — DataFrame indexed by `time_s`, columns `RoughnessBader/Helmholtz`
   and `RoughnessSethares` (one value per frame).
 * `.partials` — a **long-format** DataFrame `[time_s, frequency, amplitude]`
   with one row per detected partial (a variable number of rows per frame).
@@ -382,14 +382,14 @@ Parameters (windowing is time-based and sample-rate independent, as in 5.2):
 from comsar import WaveletRoughness, timbre_player
 
 res = WaveletRoughness(threshold=0.05).extract("my_audio.wav")
-res.features          # RoughnessHelmholtzBader, RoughnessSethares
+res.features          # RoughnessBader/Helmholtz, RoughnessSethares
 res.partials          # time_s, frequency, amplitude (long format)
 
 # both roughness curves + a partial-gram panel (grey = amplitude)
 timbre_player("my_audio.wav", res.features, partials=res.partials)
 ```
 
-The standalone functions `comsar.tracks._roughness.helmholtz_bader_roughness`
+The standalone functions `comsar.tracks._roughness.bader_helmholtz_roughness`
 and `sethares_roughness` compute a single roughness value from arrays of
 partial frequencies and amplitudes.
 
@@ -557,7 +557,7 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
     when building without git tags).
 - **CI**: added `cibuildwheel` configuration and a GitHub Actions workflow to
   build and publish multi-platform wheels (see section 8).
-- **Wavelet roughness (2026-07)**: new `comsar.WaveletRoughness` — Helmholtz-Bader
+- **Wavelet roughness (2026-07)**: new `comsar.WaveletRoughness` — Bader/Helmholtz
   and Sethares roughness per frame from a wavelet/Gabor spectrum with
   sub-grid-exact partial frequencies (ported from R. Bader's *Wavelet* app), a
   `threshold` parameter controlling the number of partials, and a long-format

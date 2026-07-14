@@ -10,7 +10,7 @@ FFT bin spacing.
 From the resulting per-frame list of partials (frequency, amplitude) two
 roughness measures are computed:
 
-* **Helmholtz-Bader** -- pair contribution peaks at a beating distance of
+* **Bader/Helmholtz** -- pair contribution peaks at a beating distance of
   ``HELMHOLTZ_MAX`` Hz and vanishes beyond ``HELMHOLTZ_LIMIT`` Hz.
 * **Sethares** -- the Plomp-Levelt / Sethares sensory-dissonance curve.
 
@@ -59,8 +59,8 @@ def gauss_window(n: int) -> np.ndarray:
     return np.exp(-k)
 
 
-def helmholtz_bader_roughness(freqs: np.ndarray, amps: np.ndarray) -> float:
-    """Helmholtz-Bader roughness of a set of partials.
+def bader_helmholtz_roughness(freqs: np.ndarray, amps: np.ndarray) -> float:
+    """Bader/Helmholtz roughness of a set of partials.
 
     ``R = sum_{i<j, d<LIMIT} A_i A_j * d * exp(-d/MAX) / (MAX * e^-1)`` with
     ``d = |f_i - f_j|``. The pair term is maximal at ``d = HELMHOLTZ_MAX``.
@@ -104,7 +104,7 @@ class RoughnessResult:
 
     Attributes:
         features:  ``pandas.DataFrame`` indexed by ``time_s`` with the columns
-                   ``RoughnessHelmholtzBader`` and ``RoughnessSethares``.
+                   ``RoughnessBader/Helmholtz`` and ``RoughnessSethares``.
         partials:  long-format ``pandas.DataFrame`` with columns
                    ``[time_s, frequency, amplitude]`` -- one row per detected
                    partial, so the number of rows per frame varies.
@@ -170,7 +170,7 @@ class WaveletRoughness:
         self.f_max = float(f_max)
         self.threshold = float(threshold)
         self.freq_step = float(freq_step)
-        self.feature_names = ('RoughnessHelmholtzBader', 'RoughnessSethares')
+        self.feature_names = ('RoughnessBader/Helmholtz', 'RoughnessSethares')
         self.verbose = False
 
     @property
@@ -244,7 +244,7 @@ class WaveletRoughness:
         """Core per-frame computation on a mono signal.
 
         Returns ``(rgh, partials_or_None, n_frames, hop_s, f_max)`` where
-        ``rgh`` has shape (n_frames, 2) = (Helmholtz-Bader, Sethares).
+        ``rgh`` has shape (n_frames, 2) = (Bader/Helmholtz, Sethares).
         """
         data = np.asarray(data, dtype=np.float64)
         f_max = min(self.f_max, fps / 2.0 - 1.0)
@@ -269,7 +269,7 @@ class WaveletRoughness:
         for k in range(n_frames):
             pf, pa = self._peaks(amp_norm[:, k], freqs, self.threshold)
             if pf.size:
-                rgh[k, 0] = helmholtz_bader_roughness(pf, pa)
+                rgh[k, 0] = bader_helmholtz_roughness(pf, pa)
                 rgh[k, 1] = sethares_roughness(pf, pa)
                 if want_partials:
                     t = round(k * hop_s, 6)
@@ -291,7 +291,7 @@ class WaveletRoughness:
         return rgh, partials, n_frames, hop_s, f_max
 
     def roughness_arrays(self, signal: np.ndarray, fps: int):
-        """Return ``(helmholtz_bader, sethares)`` roughness arrays for a mono
+        """Return ``(bader_helmholtz, sethares)`` roughness arrays for a mono
         ``signal`` sampled at ``fps``.
 
         Used by :class:`comsar.TimbreTrack` to append the two roughness columns
