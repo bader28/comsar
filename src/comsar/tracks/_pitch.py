@@ -379,13 +379,10 @@ class PitchTrack:
     
         notesinngram: notes used in ngram calculation as subset of notes applying ninnotelength condition
         """
-        dcent = self.TSparams.dcent
-        minnotelength = self.ngparams.mintolength
-        ngram = self.ngparams.ngram
-        ngcentmin = self.ngparams.ngcentmin
-        ngcentmax = self.ngparams.ngcentmax
-        nngram = self.ngparams.n
-        
+        # NOTE: the arguments passed to this method are used directly. (An earlier
+        # version overrode them with self.ngparams.mintolength / self.ngparams.n,
+        # which do not exist on ngramParams and raised AttributeError.)
+
         ngrams = []
         if (ngram > 1 and ngram <= 5):
             ngramsall=[]
@@ -526,6 +523,48 @@ class PitchTrack:
         note_df = self._notes_df(nts, frame_t, f0)
         return TonalSystemResult(scales_df, np.asarray(co, dtype=float),
                                  float(maxf), float(f0), note_df)
+
+    def ngrams(self, pitch_result, ngram=3, minnotelength=10, ngcentmin=0,
+               ngcentmax=1200, nngram=10, dcent=1, minlen=15, mindev=60,
+               noctaves=8, f0=27.5, dts=0.1):
+        """Melodic **n-gram patterns**: the most frequent interval sequences.
+
+        The melody notes are turned into a sequence of pitch **intervals** (in
+        cent), and the ``nngram`` most frequent interval n-grams are returned.
+        Interval patterns (not absolute pitches) make the fingerprint
+        transposition-invariant.
+
+        Args:
+            pitch_result:   A :class:`PitchTrack` result (or its ``.features``).
+            ngram:          n-gram depth (2..5); a 3-gram spans two intervals.
+            minnotelength:  Minimum note length (in frames) to take part.
+            ngcentmin:      Minimum absolute interval in cent to be counted.
+            ngcentmax:      Maximum absolute interval in cent (also the axis
+                            range of the interval histogram).
+            nngram:         Number of most frequent n-grams to return.
+
+        Returns:
+            A DataFrame with ``ngram - 1`` columns
+            (``interval_1_cent`` … ``interval_{ngram-1}_cent``), most frequent
+            n-gram first; each value is a melodic interval in cent (positive =
+            up, negative = down), quantised to semitones (100 cent).
+        """
+        res, _ = self._analyse_scale(pitch_result, dcent, dts, minlen, mindev,
+                                     noctaves, f0)
+        notes, nnotes = res[8], res[7]
+        ng, _ = self.extract_ngram(notes, nnotes, dcent, minnotelength, ngram,
+                                   ngcentmin, ngcentmax, nngram)
+        step = max(1, ngram - 1)
+        histrange = int(ngcentmax / 100)
+        rows = []
+        ng = np.asarray(ng, dtype=float).ravel()
+        for i in range(nngram):
+            vals = ng[i * step:(i + 1) * step]
+            if vals.size < step or np.all(vals == 0):
+                continue
+            rows.append([int(round((float(v) - histrange) * 100)) for v in vals])
+        cols = ['interval_%d_cent' % (k + 1) for k in range(step)]
+        return pd.DataFrame(rows, columns=cols)
 
     def _worker(self, idx, func, args, kwargs) -> np.ndarray:
         print(self.feature_names[idx], end=' ... ')

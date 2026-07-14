@@ -291,6 +291,16 @@ carries the frame time in seconds (`time_s`) as its index. Passing a legacy
   notes = PitchTrack().notes(pr)          # melody: start_s, stop_s, frequency, ...
   ts    = PitchTrack().tonal_system(pr)   # ts.best["name"], ts.scales, ts.octave
   ```
+- **`ngrams(pitch_result, ngram=3, minnotelength=10, ngcentmin=0, ngcentmax=1200, nngram=10, ...)`**
+  Melodic **n-gram patterns**: turn the melody into a sequence of pitch
+  intervals and return the `nngram` most frequent interval n-grams (a
+  transposition-invariant fingerprint). Returns a DataFrame with `ngram - 1`
+  columns (`interval_1_cent` …), most frequent first; each value is a melodic
+  interval in cent (positive = up, negative = down), quantised to semitones.
+
+  ```python
+  patterns = PitchTrack().ngrams(pr, ngram=3, nngram=10)   # top interval bigrams
+  ```
 - **`extract_TonalSystem(data, dcent, dts, minlen, mindev, noctaves, f0)`** *(low-level)*
   From a sequence of segment frequencies, detect notes and estimate the tonal
   system by correlating the accumulated pitch histogram against 900+ theoretical
@@ -647,12 +657,13 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
     when building without git tags).
 - **CI**: added `cibuildwheel` configuration and a GitHub Actions workflow to
   build and publish multi-platform wheels (see section 8).
-- **Melody & tonal system (2026-07)**: `PitchTrack.notes` (melody: notes with
-  start/stop/frequency/cent/MIDI) and `PitchTrack.tonal_system` (best-matching
-  scales from `scales.csv`, `TonalSystemResult`) wrap the verified
-  `extract_TonalSystem` algorithm with clean per-second/Hz outputs. The pitch
-  player gained `notes=` (green bars) and `tonal_system=` (teal scale reference
-  lines) overlays.
+- **Melody, tonal system & n-grams (2026-07)**: `PitchTrack.notes` (melody:
+  notes with start/stop/frequency/cent/MIDI), `PitchTrack.tonal_system`
+  (best-matching scales from `scales.csv`, `TonalSystemResult`) and
+  `PitchTrack.ngrams` (most frequent melodic interval n-grams) wrap the verified
+  algorithms with clean outputs (`extract_ngram`'s broken parameter override was
+  fixed). The pitch player gained `notes=` (green bars) and `tonal_system=`
+  (teal scale reference lines) overlays.
 - **Impulse pattern (2026-07)**: new `comsar.ImpulsePattern` extracts an impulse
   per pitch period (rising zero crossing before the strongest amplitude within
   `T = 1/f0`, gated by SPL `dbmin`), returning a `[time_s, amplitude]` list. The
