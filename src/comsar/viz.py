@@ -259,3 +259,213 @@ def timbre_player(wav_path, features, visible=2, partials=None,
     # wrapped in a <div> so IPython.display.HTML does not emit its
     # "Consider using IPython.display.IFrame instead" warning
     return HTML("<div>" + iframe + "</div>")
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _embed_audio_datauri(mono, sr, target_sr=22050):
+    """Return a self-contained ``data:audio/wav`` URI for a mono signal."""
+    if sr != target_sr:
+        n_new = int(len(mono) * target_sr / sr)
+        m = np.interp(np.linspace(0, len(mono), n_new, endpoint=False),
+                      np.arange(len(mono)), mono)
+    else:
+        m = mono
+    m = (m / max(np.abs(m).max(), 1e-9) * 0.98).astype("float32")
+    buf = io.BytesIO()
+    sf.write(buf, m, target_sr, format="WAV", subtype="PCM_16")
+    return "data:audio/wav;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _waveform_envelope(mono, width):
+    """Return (wmin, wmax) min/max envelopes, one value per output pixel."""
+    edges = np.linspace(0, len(mono), width + 1).astype(int)
+    wmin = np.zeros(width)
+    wmax = np.zeros(width)
+    for i in range(width):
+        seg = mono[edges[i]:edges[i + 1]]
+        if seg.size:
+            wmin[i] = seg.min()
+            wmax[i] = seg.max()
+    peak = max(np.abs(wmin).max(), np.abs(wmax).max(), 1e-9)
+    return wmin / peak, wmax / peak
+
+
+# ---------------------------------------------------------------------------
+# Pitch player
+# ---------------------------------------------------------------------------
+
+_PITCH_DOC = r"""<!doctype html><html><head><meta charset="utf-8"><style>
+  :root{--surface:#fcfcfb;--ink:#0b0b0b;--muted:#52514e;--wave:#d6d6d6;}
+  body{margin:0;font:13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;
+       color:var(--ink);background:var(--surface);}
+  #wrap{position:relative;}
+  canvas{display:block;width:100%;}
+  #cursor{position:absolute;top:0;width:2px;background:#0b0b0b;opacity:.55;
+          pointer-events:none;left:0;}
+  #bar{display:flex;align-items:center;gap:12px;padding:8px 4px;}
+  button{font:600 13px sans-serif;border:1px solid #bbb;border-radius:8px;
+         background:#fff;padding:6px 14px;cursor:pointer;}
+  button:hover{background:#f0f0ef;}
+  #t{color:var(--muted);font-variant-numeric:tabular-nums;}
+  #legend{display:flex;flex-wrap:wrap;gap:10px 16px;padding:2px 4px 8px;}
+  .lg{display:flex;align-items:center;gap:6px;color:var(--muted);
+      cursor:pointer;user-select:none;}
+  .lg.off{color:#b3b2ae;}
+  .lg.off .sw{background:#cfcecb !important;}
+  .sw{width:14px;height:3px;border-radius:2px;}
+</style></head><body>
+  <div id="bar">
+    <button id="play">&#9654;&nbsp;Play</button>
+    <span id="t">0.00 / 0.00 s</span>
+    <span style="color:#8a8a86">&mdash; click the plot to seek</span>
+  </div>
+  <div id="wrap">
+    <canvas id="cv"></canvas>
+    <div id="cursor"></div>
+  </div>
+  <div id="legend"></div>
+  <audio id="au" src="__AUDIO__" preload="auto"></audio>
+<script>
+const D = __PAYLOAD__;
+const W = D.width, WH = D.waveH, PH = D.pitchH, H = WH + PH;
+D.tracks.forEach(function(t){ t.on = true; });
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+cv.width = W*dpr; cv.height = H*dpr; cv.style.height = H+'px'; ctx.scale(dpr,dpr);
+const lf0 = Math.log(D.fmin), lf1 = Math.log(D.fmax), dur = D.duration || 1;
+function yFreq(f){ return WH + PH - (Math.log(f)-lf0)/(lf1-lf0)*PH; }
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const midY = WH/2, amp = WH/2*0.92;
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--wave');
+  ctx.lineWidth = 1; ctx.beginPath();
+  for(let i=0;i<W;i++){
+    ctx.moveTo(i+0.5, midY - D.wmax[i]*amp);
+    ctx.lineTo(i+0.5, midY - D.wmin[i]*amp);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = '#ececea'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(0,WH+0.5); ctx.lineTo(W,WH+0.5); ctx.stroke();
+  ctx.fillStyle = '#a9a8a4'; ctx.font = '10px sans-serif';
+  ctx.strokeStyle = '#eeeeec'; ctx.lineWidth = 1;
+  let gf = Math.pow(2, Math.ceil(Math.log2(D.fmin)));
+  for(; gf < D.fmax; gf *= 2){
+    const y = yFreq(gf);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    ctx.fillText(Math.round(gf)+' Hz', 3, y-2);
+  }
+  for(const tr of D.tracks){
+    if(!tr.on) continue;
+    ctx.strokeStyle = tr.color; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    const t = tr.t, f = tr.f, n = t.length;
+    let started = false;
+    for(let i=0;i<n;i++){
+      if(f[i] > 0){
+        const x = t[i]/dur*W;
+        const fc = Math.max(D.fmin, Math.min(D.fmax, f[i]));
+        const y = yFreq(fc);
+        if(!started){ ctx.beginPath(); ctx.moveTo(x,y); started=true; }
+        else ctx.lineTo(x,y);
+      } else if(started){ ctx.stroke(); started=false; }
+    }
+    if(started) ctx.stroke();
+  }
+}
+draw();
+const lg = document.getElementById('legend');
+for(const tr of D.tracks){
+  const d=document.createElement('span'); d.className='lg';
+  d.title='Click to hide/show';
+  d.innerHTML='<span class="sw" style="background:'+tr.color+'"></span>'+tr.name;
+  d.onclick=function(){ tr.on=!tr.on; d.classList.toggle('off', !tr.on); draw(); };
+  lg.appendChild(d);
+}
+const au=document.getElementById('au'), cur=document.getElementById('cursor'),
+      btn=document.getElementById('play'), tlab=document.getElementById('t');
+cur.style.height = H+'px';
+const durf = function(){ return (isFinite(au.duration)&&au.duration>0)? au.duration : D.duration; };
+const fmt = function(x){ return x.toFixed(2); };
+function place(){
+  const frac = Math.min(au.currentTime/durf(),1);
+  cur.style.left = (frac*100)+'%';
+  tlab.textContent = fmt(au.currentTime)+' / '+fmt(durf())+' s';
+}
+place();
+let raf=null;
+function loop(){ place(); raf=requestAnimationFrame(loop); }
+btn.onclick=function(){ if(au.paused){au.play();} else {au.pause();} };
+au.onplay =function(){ btn.innerHTML='&#10073;&#10073;&nbsp;Pause'; cancelAnimationFrame(raf); loop(); };
+au.onpause=function(){ btn.innerHTML='&#9654;&nbsp;Play'; cancelAnimationFrame(raf); place(); };
+au.onended=function(){ cancelAnimationFrame(raf); au.currentTime=0; place(); };
+cv.style.cursor='pointer';
+cv.onclick=function(e){ const r=cv.getBoundingClientRect();
+  au.currentTime = Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*durf(); place(); };
+</script></body></html>"""
+
+
+def pitch_player(wav_path, result, pitch_col="Pitch", fmin=None, fmax=None,
+                 width=1000, wave_h=140, pitch_h=280):
+    """Interactive f0 / pitch player for Jupyter notebooks.
+
+    Draws the waveform of ``wav_path`` in light grey and the fundamental
+    frequency (f0) track on a logarithmic frequency axis, with a play button
+    and a vertical cursor that follows the audio. Unvoiced frames (f0 <= 0)
+    leave a gap in the line. Further pitch-track layers (melody, tonal system,
+    ...) can be added later.
+
+    Args:
+        wav_path:   Path to the audio file.
+        result:     A ``PitchTrack`` result (uses ``.features``) or a DataFrame
+                    indexed by ``time_s`` containing a pitch column.
+        pitch_col:  Name of the f0 column (default ``"Pitch"``).
+        fmin, fmax: Frequency-axis limits in Hz; by default derived from the
+                    voiced f0 values.
+        width:      Internal plot width in pixels.
+        wave_h:     Height of the waveform panel in pixels.
+        pitch_h:    Height of the pitch panel in pixels.
+
+    Returns:
+        ``IPython.display.HTML`` -- renders inline in Jupyter.
+    """
+    from IPython.display import HTML
+
+    features = result.features if hasattr(result, "features") else result
+    times = np.asarray(features.index, dtype=float)
+    f0 = features[pitch_col].to_numpy(dtype=float)
+
+    data, sr = sf.read(wav_path, always_2d=True)
+    mono = data.mean(axis=1)
+    duration = len(mono) / sr
+    wmin, wmax = _waveform_envelope(mono, width)
+    audio_uri = _embed_audio_datauri(mono, sr)
+
+    voiced = f0[f0 > 0]
+    if fmin is None:
+        fmin = float(np.percentile(voiced, 1) / 1.12) if voiced.size else 50.0
+    if fmax is None:
+        fmax = float(np.percentile(voiced, 99) * 1.12) if voiced.size else 1000.0
+    fmin = max(1.0, fmin)
+    if fmax <= fmin:
+        fmax = fmin * 2.0
+
+    tracks = [{"name": "f0 (" + str(pitch_col) + ")", "color": "#2a78d6",
+               "t": [round(float(x), 4) for x in times],
+               "f": [round(float(x), 3) for x in f0]}]
+
+    payload = json.dumps({
+        "width": width, "waveH": wave_h, "pitchH": pitch_h,
+        "duration": duration, "fmin": round(fmin, 3), "fmax": round(fmax, 3),
+        "wmin": [round(float(x), 3) for x in wmin],
+        "wmax": [round(float(x), 3) for x in wmax],
+        "tracks": tracks,
+    })
+    doc = _PITCH_DOC.replace("__PAYLOAD__", payload).replace("__AUDIO__", audio_uri)
+    total_h = wave_h + pitch_h + 96
+    iframe = ('<iframe style="width:100%;max-width:{w}px;height:{h}px;border:0;'
+              'overflow:hidden" sandbox="allow-scripts allow-same-origin" '
+              'srcdoc="{doc}"></iframe>').format(
+                  w=width + 24, h=total_h, doc=escape(doc, quote=True))
+    return HTML("<div>" + iframe + "</div>")

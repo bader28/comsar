@@ -433,6 +433,25 @@ timbre_player("my_audio.wav", features, visible=None)   # all features shown
 
 See `examples/TimbreTrack_SimpleExample.ipynb` for a complete walkthrough.
 
+**`pitch_player(wav_path, result, pitch_col="Pitch", fmin=None, fmax=None, width=1000, wave_h=140, pitch_h=280)`**
+
+A companion player for pitch tracks: the waveform is drawn in light grey and the
+fundamental frequency `f0` (from `result`, a `PitchTrack` result or a DataFrame
+with a `Pitch` column indexed by `time_s`) is drawn on a **logarithmic frequency
+axis**, with the same play button, cursor and click-to-seek. Unvoiced frames
+(`f0 <= 0`) leave a gap in the line; `fmin`/`fmax` default to the voiced f0
+range. Also re-exported at the top level: `from comsar import pitch_player`.
+
+```python
+from comsar import PitchTrack, pitch_player
+
+result = PitchTrack(window_ms=25.0, overlap=0.6).extract("my_audio.wav")
+pitch_player("my_audio.wav", result)
+```
+
+See `examples/PitchTrack_f0_Extract.ipynb`. Further pitch-track layers (melody,
+tonal system) will be added to this player in later stages.
+
 ### 5.7 apollon (backbone)
 
 Key entry points used by comsar and the notebooks:
@@ -557,6 +576,9 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
     when building without git tags).
 - **CI**: added `cibuildwheel` configuration and a GitHub Actions workflow to
   build and publish multi-platform wheels (see section 8).
+- **Pitch player (2026-07)**: new `comsar.pitch_player` (in `comsar.viz`) shows
+  the f0 track on a log-frequency axis over the waveform, with play button and
+  cursor; `PitchTrack_f0_Extract.ipynb` reworked to a single-file f0 example.
 - **Wavelet roughness (2026-07)**: new `comsar.WaveletRoughness` — Bader/Helmholtz
   and Sethares roughness per frame from a wavelet/Gabor spectrum with
   sub-grid-exact partial frequencies (ported from R. Bader's *Wavelet* app), a
