@@ -191,28 +191,70 @@ class ImpulsePattern:
                 return tmax
             return int(min(tmax, max(tmin, round(fps / f0h))))
 
+        def onset_before(peak, prev, t_len):
+            """Rising zero crossing that starts the period of ``peak``.
+
+            The impulse onset is the last rising zero crossing before ``peak``
+            (and after ``prev``); if the peak lies before the first rising
+            crossing of this period (e.g. the strongest amplitude is a trough),
+            the rising crossing nearest to one period ahead of ``prev`` is used.
+            Returns a sample index (always a rising zero crossing) or -1.
+            """
+            hz = min(n_samples - 1, prev + 2 * t_len)
+            a = np.searchsorted(rising, prev, side="right")   # first ZC > prev
+            b = np.searchsorted(rising, hz, side="right")
+            if b <= a:
+                return -1
+            cand = rising[a:b]
+            bp = np.searchsorted(cand, peak, side="right")
+            if bp > 0:
+                return int(cand[bp - 1])
+            return int(cand[int(np.argmin(np.abs(cand - (prev + t_len))))])
+
         imp = []
-        n = 0
-        while n < n_samples - 1:
-            if not active[n]:
-                nxt = np.argmax(active[n:])
-                if active[n + nxt]:
-                    n = n + nxt
+        prev = -1                    # last impulse (-1 = start of an active run)
+        i = 0
+        while i < n_samples - 1:
+            if not active[i]:
+                prev = -1
+                nxt = int(np.argmax(active[i:]))
+                if active[i + nxt]:
+                    i = i + nxt
                     continue
                 break
-            t_len = period_at(n)
-            win_end = min(n_samples, n + t_len)
-            if win_end - n < 2:
-                n += 1
+            if prev < 0:
+                # first impulse after silence: peak in [i, i+T], rising ZC before it
+                t_len = period_at(i)
+                hi = min(n_samples, i + t_len)
+                if hi - i < 2:
+                    i += 1
+                    continue
+                peak = i + int(np.argmax(ax[i:hi]))
+                k = np.searchsorted(rising, peak, side="right") - 1
+                t_imp = int(rising[k]) if k >= 0 and rising[k] >= i else i
+                imp.append(t_imp)
+                prev = t_imp
+                i = t_imp + 1
                 continue
-            peak = n + int(np.argmax(ax[n:win_end]))
-            k = np.searchsorted(rising, peak, side="right") - 1
-            t_imp = int(rising[k]) if k >= 0 and rising[k] >= n else n
+            # subsequent impulse ~ one period ahead. Search the strongest
+            # amplitude in [prev + T/2, prev + 3T/2] and take the rising zero
+            # crossing that starts its period (always a rising crossing).
+            t_len = period_at(prev)
+            lo = prev + max(2, t_len // 2)
+            hi = min(n_samples, prev + (3 * t_len) // 2)
+            if hi - lo < 2:
+                prev = -1
+                i = hi if hi > i else i + 1
+                continue
+            peak = lo + int(np.argmax(ax[lo:hi]))
+            t_imp = onset_before(peak, prev, t_len)
+            if t_imp <= prev:
+                t_imp = min(n_samples - 2, prev + t_len)
+            if t_imp >= n_samples - 1:
+                break
             imp.append(t_imp)
-            # advance by one *measured* period ahead of this impulse
-            step = period_at(t_imp)
-            nxt = t_imp + step
-            n = nxt if nxt > n else n + 1
+            prev = t_imp
+            i = t_imp
 
         imp = np.asarray(imp, dtype=int)
         amps = np.zeros(imp.size)

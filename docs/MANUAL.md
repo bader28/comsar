@@ -679,8 +679,12 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
   measured from the waveform (autocorrelation, octave-error-corrected, bounded)
   rather than trusting `T = 1/f0` — this fixed skipped periods and a bug where a
   tiny interpolated f0 caused multi-second gaps (`period_source='pitch'` restores
-  the old behaviour). The pitch player gained horizontal zoom/pan and an
-  `impulses=` overlay of vertical impulse lines over the waveform.
+  the old behaviour). Onset selection was reworked so every impulse lands on a
+  genuine rising zero crossing (99.4 % on a test recording; no double/missed
+  impulses). The pitch player gained horizontal zoom/pan and an `impulses=`
+  overlay of vertical impulse lines over the waveform; its audio is embedded and
+  decoded at the **original sample rate** so the zoomed waveform's zero
+  crossings match the analysis exactly.
 - **Pitch player (2026-07)**: new `comsar.pitch_player` (in `comsar.viz`) shows
   the f0 track on a log-frequency axis over the waveform, with play button and
   cursor; `PitchTrack_f0_Extract.ipynb` reworked to a single-file f0 example.

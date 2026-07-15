@@ -535,7 +535,8 @@ cv.style.cursor = 'crosshair';
 const AC = window.AudioContext || window.webkitAudioContext;
 if(AC){
   try{
-    const ac = new AC();
+    let ac;
+    try{ ac = new AC({sampleRate: D.embedSr}); }catch(e){ ac = new AC(); }
     fetch(au.src).then(function(r){ return r.arrayBuffer(); })
       .then(function(b){ return ac.decodeAudioData(b); })
       .then(function(buf){
@@ -588,7 +589,8 @@ def pitch_player(wav_path, result, impulses=None, notes=None, tonal_system=None,
     mono = data.mean(axis=1)
     duration = len(mono) / sr
     wmin, wmax = _waveform_envelope(mono, width)
-    audio_uri = _embed_audio_datauri(mono, sr)
+    embed_sr = int(sr)
+    audio_uri = _embed_audio_datauri(mono, sr, target_sr=embed_sr)
 
     voiced = f0[f0 > 0]
     if fmin is None:
@@ -632,6 +634,7 @@ def pitch_player(wav_path, result, impulses=None, notes=None, tonal_system=None,
     payload = json.dumps({
         "width": width, "waveH": wave_h, "pitchH": pitch_h,
         "duration": duration, "fmin": round(fmin, 3), "fmax": round(fmax, 3),
+        "embedSr": embed_sr,
         "wmin": [round(float(x), 3) for x in wmin],
         "wmax": [round(float(x), 3) for x in wmax],
         "tracks": tracks, "impulses": imp_payload,
