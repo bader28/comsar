@@ -426,7 +426,7 @@ partial frequencies and amplitudes.
 
 ### 5.4 comsar.ImpulsePattern
 
-`ImpulsePattern(dbmin=52.0, f_min=60.0, f_max=1200.0, period_source='wave')` with `extract(wav_path, pitch_result)`
+`ImpulsePattern(dbmin=52.0, f_min=60.0, f_max=1200.0, period_source='wave', correlation_threshold=0.2)` with `extract(wav_path, pitch_result)`
 
 Turns the waveform into a sequence of **impulses**, one per period `T`. The
 onset of each impulse is
@@ -450,10 +450,20 @@ noisy / aperiodic parts (no clear period) it falls back to the bounded f0
 period, so transients still get a complex impulse pattern. Set
 `period_source='pitch'` to restore the plain `T = 1/f0` behaviour.
 
+**Correlation & slope.** Impulses now sit on a zero crossing of *either* slope.
+Each impulse stores a **`correlation`** value: the normalised (-1..1)
+correlation between the waveform period before and after it — ~1 for
+quasi-stationary sounds, low for transients. While the correlation stays at or
+above `correlation_threshold` (default 0.2) the onset is **locked** to the
+current zero-crossing slope (positive or negative); **below** the threshold
+(transients) the slope may flip to the crossing nearest to one period ahead.
+
 `extract` takes the audio path and a `PitchTrack` result (it uses the `Pitch`
 and `SPL` columns) and returns an **`ImpulsePatternResult`** whose `.impulses`
-is a list-like DataFrame `[time_s, amplitude]` — one row per impulse, analogous
-to the pitch track (`.to_csv(path)` writes it).
+is a list-like DataFrame `[time_s, amplitude, correlation]` — one row per
+impulse, analogous to the pitch track (`.to_csv(path)` writes it). In the pitch
+player the impulse line's **length** encodes the correlation (up = +1, down =
+-1, zero at the waveform midline).
 
 ```python
 from comsar import PitchTrack, ImpulsePattern, pitch_player
@@ -673,6 +683,13 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
   algorithms with clean outputs (`extract_ngram`'s broken parameter override was
   fixed). The pitch player gained `notes=` (green bars) and `tonal_system=`
   (teal scale reference lines) overlays.
+- **Impulse correlation & slope (2026-07)**: each impulse now carries a
+  `correlation` value (normalised similarity of the periods before/after it,
+  ~1 stationary, low for transients); impulses sit on either-slope zero
+  crossings and the onset slope locks while the correlation is above
+  `correlation_threshold` (default 0.2) and may flip below it. The pitch player
+  encodes the correlation as the impulse line's length (up/down from the
+  waveform midline).
 - **Impulse pattern (2026-07)**: new `comsar.ImpulsePattern` extracts an impulse
   per period (rising zero crossing before the strongest amplitude within `T`,
   gated by SPL `dbmin`), returning a `[time_s, amplitude]` list. The period is

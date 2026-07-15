@@ -397,13 +397,15 @@ function draw(){
   if(layers.waveform){ samples ? drawWaveSamples() : drawWaveCoarse(); }
   // impulses as vertical lines over the waveform (grey area), opacity ~ amplitude
   if(layers.impulses && D.impulses){
-    const it = D.impulses.t, ia = D.impulses.a, m = it.length;
+    const it = D.impulses.t, ia = D.impulses.a, ic = D.impulses.c, m = it.length;
+    const mid = WH/2, amp = WH/2*0.92;   // waveform zero line = mid; +1 up, -1 down
     ctx.lineWidth = 1;
     for(let i=0;i<m;i++){
       if(it[i] < T0 || it[i] > T1) continue;
       const x = xOf(it[i]);
-      ctx.strokeStyle = 'rgba(217,72,15,' + (0.22 + 0.7*ia[i]).toFixed(3) + ')';
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WH); ctx.stroke();
+      const c = ic ? Math.max(-1, Math.min(1, ic[i])) : 1;
+      ctx.strokeStyle = 'rgba(217,72,15,' + (0.3 + 0.65*ia[i]).toFixed(3) + ')';
+      ctx.beginPath(); ctx.moveTo(x, mid); ctx.lineTo(x, mid - c*amp); ctx.stroke();
     }
   }
   // panel separator
@@ -475,7 +477,7 @@ addChip('waveform', '#c9c9c7', function(){return layers.waveform;}, function(){l
 for(const tr of D.tracks){ (function(tr){
   addChip(tr.name, tr.color, function(){return tr.on;}, function(){tr.on=!tr.on;});
 })(tr); }
-if(D.impulses){ addChip('impulses', '#d9480f', function(){return layers.impulses;}, function(){layers.impulses=!layers.impulses;}); }
+if(D.impulses){ addChip('impulses (length = correlation)', '#d9480f', function(){return layers.impulses;}, function(){layers.impulses=!layers.impulses;}); }
 if(D.notes){ addChip('notes (melody)', '#008300', function(){return layers.notes;}, function(){layers.notes=!layers.notes;}); }
 if(D.scale){ addChip('tonal system', '#1baf7a', function(){return layers.scale;}, function(){layers.scale=!layers.scale;}); }
 
@@ -628,8 +630,11 @@ def pitch_player(wav_path, result, impulses=None, notes=None, tonal_system=None,
             ia = imp_df["amplitude"].to_numpy(dtype=float)
             amax = max(float(np.nanmax(ia)), 1e-12)
             ia = np.clip(ia / amax, 0.0, 1.0)
+            ic = (imp_df["correlation"].to_numpy(dtype=float)
+                  if "correlation" in imp_df.columns else np.ones(len(imp_df)))
             imp_payload = {"t": [round(float(x), 5) for x in it],
-                           "a": [round(float(x), 3) for x in ia]}
+                           "a": [round(float(x), 3) for x in ia],
+                           "c": [round(float(x), 3) for x in ic]}
 
     payload = json.dumps({
         "width": width, "waveH": wave_h, "pitchH": pitch_h,

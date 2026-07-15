@@ -50,8 +50,12 @@ class ImpulsePatternResult:
     """Result of :meth:`ImpulsePattern.extract`.
 
     Attributes:
-        impulses:  ``pandas.DataFrame`` with columns ``[time_s, amplitude]`` --
-                   the onset time (seconds) and peak amplitude of each impulse.
+        impulses:  ``pandas.DataFrame`` with columns
+                   ``[time_s, amplitude, correlation]`` -- the onset time
+                   (seconds), the peak amplitude until the next impulse, and the
+                   normalised correlation (-1..1) between the waveform period
+                   before and after the impulse (~1 for quasi-stationary sounds,
+                   low for transients).
     """
     def __init__(self, meta: TrackMeta, params: dict,
                  impulses: pd.DataFrame) -> None:
@@ -80,13 +84,21 @@ class ImpulsePattern:
                         waveform by autocorrelation (robust to f0 octave
                         errors); ``'pitch'`` uses ``T = 1 / f0`` from the pitch
                         track (the previous behaviour).
+        correlation_threshold:  While the normalised correlation of consecutive
+                        periods stays **at or above** this value the impulse
+                        onset is locked to the current zero-crossing slope
+                        (positive or negative); **below** it (transients) the
+                        slope may flip to the zero crossing nearest to one
+                        period ahead. Default 0.2.
     """
     def __init__(self, dbmin: float = DBMIN_DEFAULT, f_min: float = FMIN_DEFAULT,
-                 f_max: float = FMAX_DEFAULT, period_source: str = 'wave') -> None:
+                 f_max: float = FMAX_DEFAULT, period_source: str = 'wave',
+                 correlation_threshold: float = 0.2) -> None:
         self.dbmin = float(dbmin)
         self.f_min = float(f_min)
         self.f_max = float(f_max)
         self.period_source = period_source
+        self.correlation_threshold = float(correlation_threshold)
         self.verbose = False
 
     def _local_period(self, x, t, fps, tmin, tmax, f0h):
@@ -169,11 +181,20 @@ class ImpulsePattern:
         spl_s = np.interp(sample_t, frame_t, spl)
         active = spl_s >= self.dbmin
         ax = np.abs(x)
+        # zero crossings of both slopes: +1 rising (- -> +), -1 falling (+ -> -)
         rising = np.flatnonzero((x[:-1] <= 0.0) & (x[1:] > 0.0))
+        falling = np.flatnonzero((x[:-1] >= 0.0) & (x[1:] < 0.0))
+        zc = np.concatenate([rising, falling])
+        zc_slope = np.concatenate([np.ones(rising.size, dtype=np.int8),
+                                   -np.ones(falling.size, dtype=np.int8)])
+        order = np.argsort(zc, kind="mergesort")
+        zc = zc[order]
+        zc_slope = zc_slope[order]
 
         tmin = max(2, int(round(fps / self.f_max)))       # shortest period
         tmax = max(tmin + 2, int(round(fps / self.f_min)))  # longest period
         use_wave = self.period_source == 'wave'
+        thr = self.correlation_threshold
 
         if self.verbose:
             print("impulse pattern ...", end=" ")
@@ -191,89 +212,123 @@ class ImpulsePattern:
                 return tmax
             return int(min(tmax, max(tmin, round(fps / f0h))))
 
-        def onset_before(peak, prev, t_len):
-            """Rising zero crossing that starts the period of ``peak``.
+        def normcorr(a, b):
+            """Normalised (Pearson, zero-lag) correlation of two segments."""
+            m = min(a.size, b.size)
+            if m < 4:
+                return 0.0
+            a = a[:m] - a[:m].mean()
+            b = b[:m] - b[:m].mean()
+            na = float(np.sqrt(np.dot(a, a)))
+            nb = float(np.sqrt(np.dot(b, b)))
+            if na < 1e-12 or nb < 1e-12:
+                return 0.0
+            return float(np.dot(a, b) / (na * nb))
 
-            The impulse onset is the last rising zero crossing before ``peak``
-            (and after ``prev``); if the peak lies before the first rising
-            crossing of this period (e.g. the strongest amplitude is a trough),
-            the rising crossing nearest to one period ahead of ``prev`` is used.
-            Returns a sample index (always a rising zero crossing) or -1.
+        def onset(prev, t_len, peak, allowed_slope):
+            """Zero crossing starting the period of ``peak``; returns (idx, slope).
+
+            The onset is the last (allowed-slope) crossing before ``peak`` and
+            after ``prev``; if the peak precedes them, the crossing nearest to
+            one period ahead of ``prev``. ``allowed_slope`` in {+1, -1} restricts
+            to that slope, 0 allows both.
             """
             hz = min(n_samples - 1, prev + 2 * t_len)
-            a = np.searchsorted(rising, prev, side="right")   # first ZC > prev
-            b = np.searchsorted(rising, hz, side="right")
+            a = np.searchsorted(zc, prev, side="right")
+            b = np.searchsorted(zc, hz, side="right")
             if b <= a:
-                return -1
-            cand = rising[a:b]
-            bp = np.searchsorted(cand, peak, side="right")
-            if bp > 0:
-                return int(cand[bp - 1])
-            return int(cand[int(np.argmin(np.abs(cand - (prev + t_len))))])
+                return -1, 0
+            sl = zc[a:b]
+            sp = zc_slope[a:b]
+            if allowed_slope != 0:
+                keep = sp == allowed_slope
+                sl = sl[keep]
+                sp = sp[keep]
+                if sl.size == 0:
+                    return -1, 0
+            bp = np.searchsorted(sl, peak, side="right")
+            k = bp - 1 if bp > 0 else int(np.argmin(np.abs(sl - (prev + t_len))))
+            return int(sl[k]), int(sp[k])
 
         imp = []
+        corr = []                    # correlation value per impulse
         prev = -1                    # last impulse (-1 = start of an active run)
+        pprev = -1
+        cur_slope = 1
+        corr_run = 1.0               # start locked
         i = 0
         while i < n_samples - 1:
             if not active[i]:
-                prev = -1
+                prev = -1; pprev = -1; corr_run = 1.0
                 nxt = int(np.argmax(active[i:]))
                 if active[i + nxt]:
                     i = i + nxt
                     continue
                 break
             if prev < 0:
-                # first impulse after silence: peak in [i, i+T], rising ZC before it
+                # first impulse after silence: peak in [i, i+T], nearest ZC before it
                 t_len = period_at(i)
                 hi = min(n_samples, i + t_len)
                 if hi - i < 2:
                     i += 1
                     continue
                 peak = i + int(np.argmax(ax[i:hi]))
-                k = np.searchsorted(rising, peak, side="right") - 1
-                t_imp = int(rising[k]) if k >= 0 and rising[k] >= i else i
-                imp.append(t_imp)
-                prev = t_imp
+                t_imp, s = onset(i - 1, t_len, peak, 0)
+                if t_imp < i:
+                    a = int(np.searchsorted(zc, i, side="left"))
+                    if a < zc.size:
+                        t_imp, s = int(zc[a]), int(zc_slope[a])
+                    else:
+                        t_imp, s = i, 1
+                imp.append(t_imp); corr.append(0.0)
+                cur_slope = s; prev = t_imp; pprev = -1
                 i = t_imp + 1
                 continue
-            # subsequent impulse ~ one period ahead. Search the strongest
-            # amplitude in [prev + T/2, prev + 3T/2] and take the rising zero
-            # crossing that starts its period (always a rising crossing).
+            # subsequent impulse ~ one period ahead of ``prev``
             t_len = period_at(prev)
             lo = prev + max(2, t_len // 2)
             hi = min(n_samples, prev + (3 * t_len) // 2)
             if hi - lo < 2:
-                prev = -1
+                prev = -1; pprev = -1; corr_run = 1.0
                 i = hi if hi > i else i + 1
                 continue
             peak = lo + int(np.argmax(ax[lo:hi]))
-            t_imp = onset_before(peak, prev, t_len)
+            allowed = cur_slope if corr_run >= thr else 0   # lock or free slope
+            t_imp, s = onset(prev, t_len, peak, allowed)
             if t_imp <= prev:
-                t_imp = min(n_samples - 2, prev + t_len)
+                t_imp, s = onset(prev, t_len, prev + t_len, 0)
+                if t_imp <= prev:
+                    t_imp = min(n_samples - 2, prev + t_len)
+                    s = cur_slope
+            if allowed == 0:
+                cur_slope = s
+            # correlation of the two newest periods -> the middle impulse ``prev``
+            if pprev >= 0:
+                corr_run = normcorr(x[pprev:prev], x[prev:t_imp])
+                corr[-1] = corr_run
             if t_imp >= n_samples - 1:
                 break
-            imp.append(t_imp)
-            prev = t_imp
-            i = t_imp
+            imp.append(t_imp); corr.append(0.0)
+            pprev = prev; prev = t_imp; i = t_imp
 
         imp = np.asarray(imp, dtype=int)
+        corr = np.asarray(corr, dtype=float)
         amps = np.zeros(imp.size)
-        for i in range(imp.size):
-            a = imp[i]
-            if i + 1 < imp.size:
-                b = imp[i + 1]
-            else:
-                b = min(n_samples, a + period_at(a))
+        for k in range(imp.size):
+            a = imp[k]
+            b = imp[k + 1] if k + 1 < imp.size else min(n_samples, a + period_at(a))
             if b > a:
-                amps[i] = ax[a:b].max()
+                amps[k] = ax[a:b].max()
 
         if self.verbose:
             print(f"{timer() - pace:.4} s. ({imp.size} impulses)")
 
         impulses = pd.DataFrame({"time_s": np.round(imp / fps, 6),
-                                 "amplitude": amps})
+                                 "amplitude": amps,
+                                 "correlation": np.round(corr, 4)})
         meta = TrackMeta(comsar.__version__, datetime.utcnow(),
                          SourceMeta(*file_name.split("."), file_hash))
         params = {"dbmin": self.dbmin, "f_min": self.f_min, "f_max": self.f_max,
-                  "period_source": self.period_source}
+                  "period_source": self.period_source,
+                  "correlation_threshold": self.correlation_threshold}
         return ImpulsePatternResult(meta, params, impulses)
