@@ -426,20 +426,29 @@ partial frequencies and amplitudes.
 
 ### 5.4 comsar.ImpulsePattern
 
-`ImpulsePattern(dbmin=52.0)` with `extract(wav_path, pitch_result)`
+`ImpulsePattern(dbmin=52.0, f_min=60.0, f_max=1200.0, period_source='wave')` with `extract(wav_path, pitch_result)`
 
-Turns the waveform into a sequence of **impulses**, one per pitch period
-`T = 1 / f0`. The onset of each impulse is
+Turns the waveform into a sequence of **impulses**, one per period `T`. The
+onset of each impulse is
 
 * a **rising** zero crossing of the waveform (negative → positive), and
 * the zero crossing **before the strongest amplitude** within `T`.
 
 Only parts whose level is above `dbmin` (SPL in dB, default **52**) are
-analysed; silence resets the chain. Starting from the first impulse after
-silence, the next impulse is placed one period ahead where the local pitch
-gives the new `T`. Sustained tones therefore give a fairly regular impulse
-pattern, transients / noise a complex one. Each impulse stores the maximum
-`|amplitude|` until the next impulse.
+analysed; silence resets the chain. Sustained tones give a fairly regular
+impulse pattern, transients / noise a complex one. Each impulse stores the
+maximum `|amplitude|` until the next impulse.
+
+**Local period.** By default (`period_source='wave'`) the period `T` is measured
+*from the waveform itself* by a short autocorrelation starting at the previous
+impulse, anchored to the pitch f0 but corrected for clear octave errors, and
+bounded to `[1/f_max, 1/f_min]`. This avoids two failure modes of a plain
+`T = 1/f0`: an f0 **octave error** makes `T` too long so a whole period is
+skipped, and interpolating f0 across an unvoiced frame yields a tiny f0 and thus
+an enormous `T` that jumps across a long, loud passage (leaving a gap). For
+noisy / aperiodic parts (no clear period) it falls back to the bounded f0
+period, so transients still get a complex impulse pattern. Set
+`period_source='pitch'` to restore the plain `T = 1/f0` behaviour.
 
 `extract` takes the audio path and a `PitchTrack` result (it uses the `Pitch`
 and `SPL` columns) and returns an **`ImpulsePatternResult`** whose `.impulses`
@@ -665,10 +674,13 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
   fixed). The pitch player gained `notes=` (green bars) and `tonal_system=`
   (teal scale reference lines) overlays.
 - **Impulse pattern (2026-07)**: new `comsar.ImpulsePattern` extracts an impulse
-  per pitch period (rising zero crossing before the strongest amplitude within
-  `T = 1/f0`, gated by SPL `dbmin`), returning a `[time_s, amplitude]` list. The
-  pitch player gained horizontal zoom/pan and an `impulses=` overlay of vertical
-  impulse lines over the waveform.
+  per period (rising zero crossing before the strongest amplitude within `T`,
+  gated by SPL `dbmin`), returning a `[time_s, amplitude]` list. The period is
+  measured from the waveform (autocorrelation, octave-error-corrected, bounded)
+  rather than trusting `T = 1/f0` — this fixed skipped periods and a bug where a
+  tiny interpolated f0 caused multi-second gaps (`period_source='pitch'` restores
+  the old behaviour). The pitch player gained horizontal zoom/pan and an
+  `impulses=` overlay of vertical impulse lines over the waveform.
 - **Pitch player (2026-07)**: new `comsar.pitch_player` (in `comsar.viz`) shows
   the f0 track on a log-frequency axis over the waveform, with play button and
   cursor; `PitchTrack_f0_Extract.ipynb` reworked to a single-file f0 example.
