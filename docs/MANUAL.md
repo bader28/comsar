@@ -426,18 +426,21 @@ partial frequencies and amplitudes.
 
 ### 5.4 comsar.ImpulsePattern
 
-`ImpulsePattern(dbmin=52.0, f_min=60.0, f_max=1200.0, period_source='wave', correlation_threshold=0.2)` with `extract(wav_path, pitch_result)`
+`ImpulsePattern(dbmin=-36.0, f_min=60.0, f_max=1200.0, period_source='wave', correlation_threshold=0.2)` with `extract(wav_path, pitch_result)`
 
 Turns the waveform into a sequence of **impulses**, one per period `T`. The
-onset of each impulse is
+onset of each impulse is a **zero crossing** of the waveform (of either slope,
+see *Correlation & slope* below) that lies **before the strongest amplitude**
+within `T`.
 
-* a **rising** zero crossing of the waveform (negative → positive), and
-* the zero crossing **before the strongest amplitude** within `T`.
-
-Only parts whose level is above `dbmin` (SPL in dB, default **52**) are
-analysed; silence resets the chain. Sustained tones give a fairly regular
-impulse pattern, transients / noise a complex one. Each impulse stores the
-maximum `|amplitude|` until the next impulse.
+Only parts whose short-time level is above `dbmin` are analysed; silence resets
+the chain. The level is measured **from the waveform itself** as a 25 ms RMS in
+**dBFS** (0 dBFS = digital full scale, so the threshold is negative), default
+**-36 dB** — independent of any external SPL scaling. Choose it just above the
+noise floor of the recording's pauses (e.g. measure the RMS during a rest).
+Sustained tones give a fairly regular impulse pattern, transients / noise a
+complex one. Each impulse stores the maximum `|amplitude|` until the next
+impulse.
 
 **Local period.** By default (`period_source='wave'`) the period `T` is measured
 *from the waveform itself* by a short autocorrelation starting at the previous
@@ -445,10 +448,15 @@ impulse, anchored to the pitch f0 but corrected for clear octave errors, and
 bounded to `[1/f_max, 1/f_min]`. This avoids two failure modes of a plain
 `T = 1/f0`: an f0 **octave error** makes `T` too long so a whole period is
 skipped, and interpolating f0 across an unvoiced frame yields a tiny f0 and thus
-an enormous `T` that jumps across a long, loud passage (leaving a gap). For
-noisy / aperiodic parts (no clear period) it falls back to the bounded f0
-period, so transients still get a complex impulse pattern. Set
-`period_source='pitch'` to restore the plain `T = 1/f0` behaviour.
+an enormous `T` that jumps across a long, loud passage (leaving a gap). A
+**continuity** rule keeps the period stable on quasi-stationary tones: while the
+waveform is still clearly periodic at the previous period, that period is kept,
+so a strong harmonic (autocorrelation high at `T/2`) or a momentary f0 glitch no
+longer halves the period into a spurious octave jump. On transients the
+autocorrelation at the old period collapses, so the search is released and the
+period re-measured freely. For noisy / aperiodic parts it falls back to the
+bounded f0 period. Set `period_source='pitch'` to restore the plain `T = 1/f0`
+behaviour.
 
 **Correlation & slope.** Impulses now sit on a zero crossing of *either* slope.
 Each impulse stores a **`correlation`** value: the normalised (-1..1)
@@ -459,7 +467,8 @@ current zero-crossing slope (positive or negative); **below** the threshold
 (transients) the slope may flip to the crossing nearest to one period ahead.
 
 `extract` takes the audio path and a `PitchTrack` result (it uses the `Pitch`
-and `SPL` columns) and returns an **`ImpulsePatternResult`** whose `.impulses`
+column as a period-search hint; the level gate is computed from the waveform, so
+an `SPL` column is not required) and returns an **`ImpulsePatternResult`** whose `.impulses`
 is a list-like DataFrame `[time_s, amplitude, correlation]` — one row per
 impulse, analogous to the pitch track (`.to_csv(path)` writes it). In the pitch
 player the impulse line's **length** encodes the correlation (up = +1, down =
@@ -469,7 +478,7 @@ player the impulse line's **length** encodes the correlation (up = +1, down =
 from comsar import PitchTrack, ImpulsePattern, pitch_player
 
 pr = PitchTrack(window_ms=25.0, overlap=0.6).extract("my_audio.wav")
-ip = ImpulsePattern(dbmin=52.0).extract("my_audio.wav", pr)
+ip = ImpulsePattern(dbmin=-36.0).extract("my_audio.wav", pr)
 ip.impulses          # time_s, amplitude
 
 pitch_player("my_audio.wav", pr, impulses=ip)   # impulses as vertical lines
@@ -683,6 +692,13 @@ Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
   algorithms with clean outputs (`extract_ngram`'s broken parameter override was
   fixed). The pitch player gained `notes=` (green bars) and `tonal_system=`
   (teal scale reference lines) overlays.
+- **Impulse dBFS gate & octave-continuity fix (2026-07)**: the level gate is now
+  measured from the waveform as a 25 ms RMS in **dBFS** (default `dbmin=-36`,
+  0 dBFS = full scale) instead of an external SPL scale, so pauses/background are
+  reliably skipped (set it just above the recording's noise floor). A period
+  **continuity** rule stops spurious octave jumps on sustained tones: the
+  previous period is kept while the waveform is still clearly periodic there, and
+  only released (re-measured) on transients.
 - **Impulse correlation & slope (2026-07)**: each impulse now carries a
   `correlation` value (normalised similarity of the periods before/after it,
   ~1 stationary, low for transients); impulses sit on either-slope zero
