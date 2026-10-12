@@ -29,6 +29,26 @@ class SourceMeta(container.Params):
     extension: str
     hash_: str
 
+    @classmethod
+    def from_filename(cls, file_name: str, hash_: str) -> 'SourceMeta':
+        """Build ``SourceMeta`` from a file name.
+
+        The extension is split off at the *last* dot only, so dots inside the
+        file name (e.g. ``My.Song.wav``) stay part of ``name`` instead of being
+        mistaken for the extension separator. ``extension`` is returned without
+        the leading dot (``'wav'``), matching the previous behaviour; a file
+        name without an extension yields an empty ``extension``.
+
+        Args:
+            file_name:  Source file name (basename, with or without path).
+            hash_:      Content hash of the source.
+
+        Returns:
+            ``SourceMeta`` instance.
+        """
+        path = pathlib.PurePath(file_name)
+        return cls(path.stem, path.suffix.lstrip('.'), hash_)
+
 
 @dataclass
 class TrackMeta(container.Params):

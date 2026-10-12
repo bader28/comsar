@@ -318,7 +318,7 @@ class WaveletRoughness:
         index = pd.Index(np.round(np.arange(n_frames) * hop_s, 6), name='time_s')
         features = pd.DataFrame(rgh, columns=self.feature_names, index=index)
 
-        file_meta = SourceMeta(*snd.file_name.split('.'), snd.hash)
+        file_meta = SourceMeta.from_filename(snd.file_name, snd.hash)
         meta = TrackMeta(comsar.__version__, datetime.utcnow(), file_meta)
         params = {'window_ms': self.window_ms, 'overlap': self.overlap,
                   'f_min': self.f_min, 'f_max': f_max,

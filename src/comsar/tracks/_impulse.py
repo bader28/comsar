@@ -366,7 +366,7 @@ class ImpulsePattern:
                                  "amplitude": amps,
                                  "correlation": np.round(corr, 4)})
         meta = TrackMeta(comsar.__version__, datetime.utcnow(),
-                         SourceMeta(*file_name.split("."), file_hash))
+                         SourceMeta.from_filename(file_name, file_hash))
         params = {"dbmin": self.dbmin, "f_min": self.f_min, "f_max": self.f_max,
                   "period_source": self.period_source,
                   "correlation_threshold": self.correlation_threshold}

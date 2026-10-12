@@ -185,7 +185,7 @@ class TimbreTrack:
         for i, (fun, arg, kwarg) in enumerate(zip(self.funcs, args, kwargs)):
             out[:, i] = self._worker(i, fun, arg, kwarg)
 
-        file_meta = SourceMeta(*snd.file_name.split('.'), snd.hash)
+        file_meta = SourceMeta.from_filename(snd.file_name, snd.hash)
         track_meta = TrackMeta(comsar.__version__, datetime.utcnow(),
                                file_meta)
         out = pd.DataFrame(data=out, columns=self.feature_names)
