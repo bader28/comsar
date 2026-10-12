@@ -59,6 +59,12 @@ SEGMENTATION_DEFAULT = aps.SegmentationParams(n_perseg=2205, n_overlap=1764, pad
 WINDOW_MS_DEFAULT = 50.0    # = 2205 samples at 44.1 kHz
 OVERLAP_DEFAULT = 0.8       # = 1764 samples at 44.1 kHz
 
+# f0-free YIN pitch detector (replaces apollon's acf_pitch)
+FMIN_PITCH_DEFAULT = 60.0   # lowest detectable f0 (Hz) -> longest period
+FMAX_PITCH_DEFAULT = 1200.0  # highest detectable f0 (Hz) -> shortest period
+YIN_THRESHOLD = 0.12        # absolute threshold on the CMND function
+YIN_VOICED_DP = 0.35        # dp above this -> treat frame as unvoiced (Pitch=0)
+
 
 class PitchTrack:
     """Compute PitchTrack of an audio file.
@@ -73,14 +79,22 @@ class PitchTrack:
     def __init__(self,
                  window_ms: float = WINDOW_MS_DEFAULT,
                  overlap: float = OVERLAP_DEFAULT,
+                 f_min: float = FMIN_PITCH_DEFAULT,
+                 f_max: float = FMAX_PITCH_DEFAULT,
+                 pitch_method: str = 'yin',
                  seg_params: Optional[aps.SegmentationParams] = None,
                  tonalsystem_params: Optional[TonalSystemParams] = None,
                  ngram_params: Optional[ngramParams] = None) -> None:
         """
         Args:
-            window_ms:   Length of the analysis window in milliseconds.
-            overlap:     Overlap between consecutive windows as a fraction of
-                         the window length (0 < overlap < 1).
+            window_ms:   Hop grid of the pitch track in milliseconds (the time
+                         resolution). The YIN analysis window itself is sized
+                         from ``f_min`` (>= two of the longest periods),
+                         independent of this value.
+            overlap:     Overlap between consecutive frames as a fraction of
+                         ``window_ms`` (0 < overlap < 1); sets the hop.
+            f_min, f_max:  Frequency bounds (Hz) of the f0-free YIN pitch
+                         detector; the period is searched in ``[1/f_max, 1/f_min]``.
             seg_params:  Legacy sample-based segmentation parameters. If given,
                          ``window_ms``/``overlap`` are ignored (historical
                          behaviour with a fixed sample rate).
@@ -91,6 +105,13 @@ class PitchTrack:
 
         self.window_ms = float(window_ms)
         self.overlap = float(overlap)
+        self.f_min = float(f_min)
+        self.f_max = float(f_max)
+        self.pitch_method = str(pitch_method).lower()
+        if self.pitch_method not in ('yin', 'acf'):
+            raise ValueError("pitch_method must be 'yin' (default, f0-free YIN "
+                             "detector) or 'acf' (legacy autocorrelation), got "
+                             f"{pitch_method!r}.")
         self._fixed = seg_params        # legacy mode if not None
 
         if self._fixed is not None:
@@ -104,7 +125,10 @@ class PitchTrack:
         self.ngparams = ngramParams(ngram_params or NGRAM_DEFAULT)
 
         self.feature_names = ('Pitch','SPL')
-        self.funcs = [acf_pitch, features.spl]
+        # Pitch is filled in ``extract`` by the selected detector
+        # (``pitch_method``: 'yin' -> ``_yin_pitch``, 'acf' -> ``acf_pitch``);
+        # the worker only needs a placeholder for the Pitch column here.
+        self.funcs = [_pitch_zero, features.spl]
         self.pace = np.zeros(self.n_features)
         self.verbose = False
 
@@ -140,6 +164,7 @@ class PitchTrack:
             snd = apa.AudioFile(input1)
             fps = snd.fps
             cutter = self._make_cutter(fps)
+            mono_full = np.asarray(snd.data.squeeze(), dtype=float)
             segs = cutter.transform(snd.data.squeeze())
             args = [(segs.data, snd.fps),
                 (segs.data,)]
@@ -147,9 +172,12 @@ class PitchTrack:
             snd = input1
             fps = int(input2)
             cutter = self._make_cutter(fps)
+            mono_full = np.asarray(snd.squeeze(), dtype=float)
             segs = cutter.transform(snd.squeeze())
             args = [(segs.data, input2),
                 (segs.data,)]
+        if mono_full.ndim > 1:
+            mono_full = mono_full.mean(axis=1)
 
         kwargs = [{},{}]
 
@@ -187,10 +215,52 @@ class PitchTrack:
         out.index = np.round(np.arange(len(out)) * (hop / fps), 6)
         out.index.name = 'time_s'
 
+        # Fill the Pitch column with the selected detector. 'yin' (default) is
+        # the f0-free YIN detector evaluated at each frame centre; 'acf' is the
+        # legacy per-frame autocorrelation pitch.
+        if self.pitch_method == 'acf':
+            pitch_acf = np.asarray(acf_pitch(segs.data, fps), dtype=float)
+            out['Pitch'] = pitch_acf[:len(out)]
+        else:
+            centers = np.rint(out.index.to_numpy(dtype=float) * fps).astype(int)
+            out['Pitch'] = self._yin_pitch(mono_full, fps, centers)
+
         if type(input1) is str:
             snd.close()
 
         return TrackResult(meta, self.params, out)
+
+    def _yin_pitch(self, x: np.ndarray, fps: int,
+                   centers: np.ndarray) -> np.ndarray:
+        """f0-free pitch (Hz) at each sample position in ``centers``.
+
+        A YIN cumulative-mean-normalised difference function is evaluated on a
+        window centred on each frame (sized from ``f_min`` so at least two of
+        the longest periods fit, independent of the hop grid). Frames whose best
+        dip is not clearly periodic (``dp >= YIN_VOICED_DP``) are marked unvoiced
+        (``Pitch = 0``). The raw track is then octave-cleaned by snapping every
+        voiced frame to the nearest octave of its local median -- this is what
+        removes the octave errors of the previous autocorrelation pitch.
+        """
+        x = np.asarray(x, dtype=float)
+        n = x.size
+        tmin = max(2, int(round(fps / self.f_max)))
+        tmax = max(tmin + 2, int(round(fps / self.f_min)))
+        win = 2 * tmax
+        need = win + tmax
+        half = need // 2
+        per = np.zeros(centers.size)
+        qual = np.ones(centers.size)
+        for k, c in enumerate(centers):
+            lo = int(c) - half
+            seg = np.zeros(need)
+            a = max(0, lo); b = min(n, lo + need)
+            if b > a:
+                seg[a - lo:b - lo] = x[a:b]
+            per[k], qual[k] = _yin_frame(seg, tmin, tmax, win, YIN_THRESHOLD)
+        voiced = (per > 0) & (qual < YIN_VOICED_DP)
+        pitch = np.where(voiced, fps / np.where(per > 0, per, 1.0), 0.0)
+        return _octave_clean(pitch)
 
     def extract_TonalSystem(self, data: np.ndarray, dcent: float, dts: float, minlen: int, mindev: int, noctaves: int, f0: float) -> np.ndarray:
         """Pitch cummulation and Tonal System Extraction
@@ -278,8 +348,19 @@ class PitchTrack:
                 
                     if exceeds_over  == 0 and exceeds_under == 0:
                         cont = cont + 1
-                    #Note has at least one cent = 0, meaning noise
+                    #Note ends at a cent = 0 (unvoiced) frame: record the valid
+                    #part *before* skipping it (otherwise a good note that simply
+                    #ends on an unvoiced frame would be dropped entirely).
                     elif len(np.where(cent[pos:pos+minlen+cont] == 0)[0]) != 0:
+                        cn=np.zeros(n)
+                        for j in range(pos, pos + minlen + cont -1):
+                            if cent[j] <= n and cent[j] > 0:
+                                cn[int(cent[j])] += 1
+                        if max(cn) > 0:
+                            maxa = max(cn)
+                            notes.append(pitch_type('note', pos, pos + minlen + cont -1, np.where(cn == maxa)[0][0], 0))
+                            debug[pos] = notes[nnotes].start
+                            nnotes = nnotes + 1
                         pos = pos + minlen + cont
                         notecont = False
                     #Maximum length of note arrived at minlen + cont
@@ -295,7 +376,23 @@ class PitchTrack:
                         pos = pos + minlen + cont
                         nnotes = nnotes + 1
                         notecont = False
-        
+
+                #Note ran to the very end of the data: record it (otherwise the
+                #last note of a file is dropped when the loop hits the end).
+                if notecont:
+                    hi = min(pos + minlen + cont, cent.size)
+                    cn = np.zeros(n)
+                    for j in range(pos, hi):
+                        if 0 < cent[j] <= n:
+                            cn[int(cent[j])] += 1
+                    if max(cn) > 0:
+                        maxa = max(cn)
+                        notes.append(pitch_type('note', pos, hi - 1, np.where(cn == maxa)[0][0], 0))
+                        debug[pos] = notes[nnotes].start
+                        nnotes = nnotes + 1
+                    pos = hi
+                    notecont = False
+
             pos = pos + 1
 
         #Detect tonal system
@@ -626,8 +723,101 @@ class TonalSystemResult:
         return sorted(set(round(f, 3) for f in freqs))
 
 
+def _pitch_zero(sig: np.ndarray, fps: int, **kwargs) -> np.ndarray:
+    """Placeholder pitch worker (Pitch is filled by the YIN detector)."""
+    return np.zeros(np.atleast_2d(sig).shape[1])
+
+
+def _yin_frame(seg: np.ndarray, tmin: int, tmax: int, win: int,
+               thr: float) -> tuple:
+    """YIN period (samples) and its dip value for one window.
+
+    Returns ``(period, dp)`` where ``period`` is a sub-sample-refined lag (0 if
+    the window is too short) and ``dp`` is the cumulative-mean-normalised
+    difference at that lag (small = clearly periodic). Being f0-free and using
+    the *first* dip below ``thr`` (not the global autocorrelation maximum), it is
+    robust against the octave errors that plague plain autocorrelation.
+    """
+    if seg.size < win + tmax:
+        return 0.0, 1.0
+    s = seg[:win + tmax]
+    cum = np.concatenate(([0.0], np.cumsum(s * s)))
+    taus = np.arange(tmax + 1)
+    e0 = cum[win] - cum[0]
+    e_tau = cum[taus + win] - cum[taus]           # energy of the shifted window
+    nfft = 1
+    while nfft < 2 * (win + tmax):
+        nfft <<= 1
+    f = np.fft.rfft(s[:win], nfft)
+    g = np.fft.rfft(s, nfft)
+    r = np.fft.irfft(np.conj(f) * g)[:tmax + 1]    # cross terms sum s_j s_{j+tau}
+    d = e0 + e_tau - 2 * r                          # difference function d(tau)
+    d[d < 0] = 0.0
+    cs = np.cumsum(d[1:])
+    dp = np.ones(tmax + 1)
+    tt = np.arange(1, tmax + 1)
+    dp[1:] = d[1:] * tt / np.where(cs > 0, cs, 1.0)  # cumulative mean normalise
+    # first local minimum below the absolute threshold, else the global min
+    t = tmin
+    cand = None
+    while t < tmax:
+        if dp[t] < thr:
+            while t + 1 <= tmax and dp[t + 1] < dp[t]:
+                t += 1
+            cand = t
+            break
+        t += 1
+    if cand is None:
+        cand = tmin + int(np.argmin(dp[tmin:tmax + 1]))
+    q = float(dp[cand])
+    # parabolic interpolation around the dip for a sub-sample period
+    period = float(cand)
+    if 0 < cand < tmax:
+        y0, y1, y2 = dp[cand - 1], dp[cand], dp[cand + 1]
+        denom = y0 - 2.0 * y1 + y2
+        if denom != 0.0:
+            shift = 0.5 * (y0 - y2) / denom
+            if -1.0 < shift < 1.0:
+                period = cand + shift
+    return period, q
+
+
+def _octave_clean(pitch: np.ndarray) -> np.ndarray:
+    """Snap every voiced frame to the nearest octave of its local median.
+
+    Works in log2 space over a +/-5 frame neighbourhood of voiced frames, so a
+    single octave-slipped frame is pulled back onto the melodic line without
+    disturbing genuine (sub-octave) pitch moves.
+    """
+    v = pitch > 0
+    if int(v.sum()) < 3:
+        return pitch
+    cur = pitch.copy()
+    idx = np.where(v)[0]
+    # two passes: the second uses the already-cleaned track as reference, which
+    # fixes isolated octave slips at the very edge of a voiced run (few neighbours)
+    for _ in range(2):
+        logf = np.zeros(pitch.size)
+        logf[v] = np.log2(cur[v])
+        ref = logf.copy()
+        for j in idx:
+            lo = max(0, j - 7); hi = min(pitch.size, j + 8)
+            win = logf[lo:hi][v[lo:hi]]
+            if win.size:
+                m = float(np.median(win))
+                val = logf[j]
+                while val - m > 0.5:
+                    val -= 1.0
+                while m - val > 0.5:
+                    val += 1.0
+                ref[j] = val
+        cur = np.zeros(pitch.size)
+        cur[v] = 2.0 ** ref[v]
+    return cur
+
+
 def acf_pitch(sig: np.ndarray, fps: int, **kwargs) -> np.ndarray:
-    """Pitch estimation with auto-correlation."""
+    """Pitch estimation with auto-correlation (legacy, no longer used)."""
     ptch = np.zeros(sig.shape[1])
     acf_seg = np.array([ast.acf(__s) for __s in np.atleast_2d(sig).T])
     first_zero_d_acf = np.argmax(np.diff(acf_seg<0), axis=1)

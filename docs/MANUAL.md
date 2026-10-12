@@ -662,6 +662,23 @@ python -m build          # -> dist/*.whl and dist/*.tar.gz
 Relative to the upstream `ifsm/apollon`, `teagum/chainsaddiction` and
 `ifsm/comsar`:
 
+- **Release 0.0.15 (2026-10)**:
+  - **YIN pitch is now the default** `PitchTrack` engine — a self-contained,
+    octave-robust f0 detector that removes the octave errors of the old
+    autocorrelation pitch. The legacy engine stays available via
+    `PitchTrack(pitch_method='acf')`; `pitch_method='yin'` is the default.
+    New `PitchTrack` parameters `f_min` / `f_max` bound the YIN search range.
+  - Two note-detection fixes in `extract_TonalSystem` (notes ending on an
+    unvoiced frame, and notes running to the end of the file, were dropped).
+  - **No more `pkg_resources` (setuptools) at import time** — apollon's schema
+    loader uses `importlib.resources`, so `import comsar` works on Python ≥ 3.12
+    and minimal venvs. comsar now requires `bader-apollon >= 0.1.7`.
+  - Source file names are split at the last dot only (dotted names like
+    `My.Song.wav` no longer break the metadata).
+  - **Example notebooks refreshed** to a small, documented set:
+    `TimbreTrack_SimpleExample`, `PitchTrack_Example`, `SOM_HipHop` and
+    `WaveletRoughness_Example` — the SOM and roughness examples run from shipped
+    CSVs, no audio needed.
 - **Distribution renamed** to `bader-apollon`, `bader-chainsaddiction`,
   `bader-comsar` (import names unchanged). `__init__` version lookups and the
   inter-package dependencies were updated accordingly.
